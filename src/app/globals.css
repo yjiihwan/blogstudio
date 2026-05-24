@@ -1,26 +1,124 @@
 @import "tailwindcss";
 
+@theme {
+  /* Editorial palette — warm parchment + deep ink, single accent */
+  --color-paper-50: #ffffff;
+  --color-paper-100: #fafaf7;   /* canvas */
+  --color-paper-200: #f3f1ea;   /* surface */
+  --color-paper-300: #e6e3d8;   /* borders */
+  --color-paper-400: #c8c4b6;
+  --color-paper-500: #98948a;
+
+  --color-ink-50: #f5f5f4;
+  --color-ink-100: #e7e5e4;
+  --color-ink-200: #d6d3d1;
+  --color-ink-300: #a8a29e;
+  --color-ink-400: #78716c;
+  --color-ink-500: #57534e;
+  --color-ink-600: #44403c;
+  --color-ink-700: #292524;
+  --color-ink-800: #1c1917;
+  --color-ink-900: #0c0a09;
+
+  /* Single accent: warm berry/팥 — confident but quiet */
+  --color-accent-50: #fdf2f4;
+  --color-accent-100: #fbe4e8;
+  --color-accent-200: #f5c2cc;
+  --color-accent-300: #ec98a8;
+  --color-accent-400: #de6981;
+  --color-accent-500: #c84461;
+  --color-accent-600: #a72e4b;
+  --color-accent-700: #80213a;
+  --color-accent-800: #56172a;
+  --color-accent-900: #320d18;
+
+  /* Soft signal colors */
+  --color-leaf-500: #2f9659;
+  --color-leaf-100: #dbf1e3;
+  --color-amber-500: #c08a26;
+  --color-amber-100: #fbeed1;
+  --color-sky-500: #2563a1;
+  --color-sky-100: #d6e7f5;
+
+  --font-sans:
+    "Pretendard Variable", "Pretendard", Inter, -apple-system,
+    BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR",
+    "Malgun Gothic", system-ui, sans-serif;
+  --font-serif:
+    "Source Serif 4", "Noto Serif KR", ui-serif, Georgia, serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  --radius-card: 12px;
+  --radius-button: 8px;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #fafaf7;
+  --foreground: #1c1917;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss06", "kern", "calt";
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  word-break: keep-all;
+  line-break: strict;
+  overflow-wrap: anywhere;
+}
+
+::selection {
+  background: var(--color-accent-200);
+  color: var(--color-ink-900);
+}
+
+/* Subtle paper texture (very low contrast — feels like a real desk) */
+.paper-texture {
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(0,0,0,0.018) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+/* Long-form reading utilities for draft preview */
+.prose-blog {
+  font-size: 17px;
+  line-height: 1.78;
+  letter-spacing: -0.005em;
+  color: var(--color-ink-800);
+}
+.prose-blog > * + * { margin-top: 1.15em; }
+.prose-blog h1 { font-size: 28px; font-weight: 800; line-height: 1.35; margin-top: 1.6em; letter-spacing: -0.02em; }
+.prose-blog h2 { font-size: 22px; font-weight: 800; line-height: 1.4; margin-top: 1.6em; letter-spacing: -0.015em; }
+.prose-blog h3 { font-size: 18px; font-weight: 700; line-height: 1.45; margin-top: 1.4em; }
+.prose-blog img {
+  border-radius: 10px;
+  margin: 1.4em auto;
+  max-width: 100%;
+  display: block;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+}
+.prose-blog blockquote {
+  border-left: 3px solid var(--color-accent-400);
+  padding: 0.1em 0 0.1em 1em;
+  color: var(--color-ink-600);
+  font-style: italic;
+}
+.prose-blog ul, .prose-blog ol { padding-left: 1.4em; }
+.prose-blog ul { list-style: disc; }
+.prose-blog ol { list-style: decimal; }
+.prose-blog a { color: var(--color-accent-600); text-decoration: underline; text-underline-offset: 3px; }
+.prose-blog hr { border: 0; border-top: 1px solid var(--color-paper-300); margin: 2em auto; }
+
+/* utilities */
+@layer utilities {
+  .text-balance { text-wrap: balance; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
 }

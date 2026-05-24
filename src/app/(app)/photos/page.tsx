@@ -1,0 +1,100 @@
+import Link from "next/link";
+import { db, schema } from "@/db/client";
+import { eq, desc } from "drizzle-orm";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Camera, FileEdit, CheckCircle2 } from "lucide-react";
+import { relativeTime } from "@/lib/utils";
+
+export const dynamic = "force-dynamic";
+
+export default async function PhotosPage() {
+  const reqs = await db.query.imageRequests.findMany({
+    where: eq(schema.imageRequests.status, "pending"),
+    with: { draft: { with: { blog: true } } },
+    orderBy: desc(schema.imageRequests.createdAt),
+  });
+
+  return (
+    <div className="px-5 lg:px-10 py-8 lg:py-12 max-w-6xl mx-auto">
+      <header className="mb-7">
+        <div className="text-[11px] font-bold tracking-[0.18em] text-accent-600 uppercase mb-1.5">
+          Photo Requests
+        </div>
+        <h1 className="text-2xl lg:text-3xl font-black tracking-tight">
+          사진 요청
+        </h1>
+        <p className="mt-1.5 text-sm text-ink-500 max-w-xl">
+          AI가 글에 필요하다고 판단한 직접 촬영 컷입니다. 휴대폰으로
+          이 페이지를 열고 촬영·업로드하면 글에 자동으로 들어갑니다.
+        </p>
+      </header>
+
+      {reqs.length === 0 ? (
+        <Card>
+          <CardContent className="py-20 text-center">
+            <Camera className="size-10 text-paper-400 mx-auto mb-3" />
+            <p className="text-sm text-ink-500">대기 중인 사진 요청이 없어요.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-3">
+          {reqs.map((r) => (
+            <Card key={r.id}>
+              <CardContent>
+                <div className="flex items-start gap-3">
+                  <div className="size-12 rounded-lg bg-accent-100 text-accent-700 flex items-center justify-center font-black shrink-0">
+                    {r.slot}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <Badge tone="outline">{r.draft.blog.displayName}</Badge>
+                      <span className="text-[11px] text-ink-400">
+                        {relativeTime(r.createdAt)}
+                      </span>
+                    </div>
+                    <div className="text-sm font-semibold text-ink-900 mb-0.5">
+                      {r.description}
+                    </div>
+                    {r.composition && (
+                      <div className="text-xs text-ink-500">
+                        구도: {r.composition}
+                      </div>
+                    )}
+                    <Link
+                      href={`/queue/${r.draftId}`}
+                      className="text-xs text-accent-600 font-semibold mt-2 inline-flex items-center gap-1 hover:underline"
+                    >
+                      <FileEdit className="size-3" />
+                      원본 초안 보기
+                    </Link>
+                  </div>
+                </div>
+
+                <label className="mt-4 block rounded-lg border-2 border-dashed border-paper-300 px-4 py-6 text-center cursor-pointer hover:border-accent-400 hover:bg-accent-50/50 transition">
+                  <Camera className="size-5 text-ink-400 mx-auto mb-1.5" />
+                  <div className="text-xs font-semibold text-ink-700">
+                    사진 촬영·업로드
+                  </div>
+                  <div className="text-[10px] text-ink-400 mt-0.5">
+                    JPG / PNG / HEIC, 최대 10MB
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                  />
+                </label>
+                <Button variant="ghost" size="sm" className="w-full mt-2 text-ink-400">
+                  사진 없이 진행 (자동 이미지로 대체)
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
