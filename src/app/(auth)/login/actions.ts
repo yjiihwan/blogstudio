@@ -30,6 +30,24 @@ export async function loginAction(formData: FormData) {
   const ok = await verifyPassword(password, user.passwordHash);
   if (!ok) redirect(invalid);
 
+  if (user.status === "pending") {
+    redirect(
+      `/login?pending=1&email=${encodeURIComponent(email)}`
+    );
+  }
+
+  if (user.status === "rejected") {
+    redirect(
+      `/login?error=${encodeURIComponent("가입이 거부되었습니다. 관리자에게 문의해주세요.")}&email=${encodeURIComponent(email)}`
+    );
+  }
+
+  if (!user.isActive) {
+    redirect(
+      `/login?error=${encodeURIComponent("계정이 비활성화되었습니다. 관리자에게 문의해주세요.")}&email=${encodeURIComponent(email)}`
+    );
+  }
+
   const token = await signSession({ uid: user.id, role: user.role });
   await setSessionCookie(token);
   redirect("/dashboard");

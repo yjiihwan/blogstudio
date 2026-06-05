@@ -1,19 +1,19 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import { loginAction } from "./actions";
+import { signupAction } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 
-export default async function LoginPage({
+export default async function SignupPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; email?: string; signup?: string; pending?: string }>;
+  searchParams: Promise<{ error?: string; name?: string; email?: string }>;
 }) {
   if (await getSession()) redirect("/dashboard");
-  const { error, email, signup, pending } = await searchParams;
+  const { error, name, email } = await searchParams;
 
   return (
     <div className="min-h-screen bg-paper-100 paper-texture flex items-center justify-center px-6 py-16">
@@ -27,12 +27,24 @@ export default async function LoginPage({
 
         <Card>
           <CardContent className="py-8">
-            <h1 className="text-2xl font-bold tracking-tight">로그인</h1>
+            <h1 className="text-2xl font-bold tracking-tight">회원가입</h1>
             <p className="mt-1.5 text-sm text-ink-500">
-              네이버 블로그 자동화 스튜디오에 오신 것을 환영합니다.
+              계정을 만들면 관리자의 승인 후 서비스를 이용할 수 있습니다.
             </p>
 
-            <form action={loginAction} className="mt-7 space-y-4">
+            <form action={signupAction} className="mt-7 space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="name">이름</Label>
+                <Input
+                  id="name"
+                  name="name"
+                  type="text"
+                  defaultValue={name ?? ""}
+                  autoComplete="name"
+                  required
+                  placeholder="홍길동"
+                />
+              </div>
               <div className="space-y-1.5">
                 <Label htmlFor="email">이메일</Label>
                 <Input
@@ -42,6 +54,7 @@ export default async function LoginPage({
                   defaultValue={email ?? ""}
                   autoComplete="email"
                   required
+                  placeholder="name@example.com"
                 />
               </div>
               <div className="space-y-1.5">
@@ -50,22 +63,21 @@ export default async function LoginPage({
                   id="password"
                   name="password"
                   type="password"
-                  autoComplete="current-password"
+                  autoComplete="new-password"
+                  required
+                  placeholder="8자 이상"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="passwordConfirm">비밀번호 확인</Label>
+                <Input
+                  id="passwordConfirm"
+                  name="passwordConfirm"
+                  type="password"
+                  autoComplete="new-password"
                   required
                 />
               </div>
-
-              {signup === "1" && (
-                <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-700">
-                  회원가입이 완료되었습니다. 로그인해주세요.
-                </div>
-              )}
-
-              {pending === "1" && (
-                <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
-                  가입 신청이 완료되었습니다. 관리자 승인 후 로그인하실 수 있습니다.
-                </div>
-              )}
 
               {error && (
                 <div className="rounded-lg bg-accent-50 border border-accent-200 px-3 py-2 text-sm text-accent-700">
@@ -74,23 +86,19 @@ export default async function LoginPage({
               )}
 
               <Button type="submit" size="lg" className="w-full mt-2">
-                로그인
+                가입하기
               </Button>
 
               <p className="text-center text-sm text-ink-500 pt-2">
-                계정이 없으신가요?{" "}
-                <Link href="/signup" className="text-ink-800 underline underline-offset-2 font-medium">
-                  회원가입
+                이미 계정이 있으신가요?{" "}
+                <Link
+                  href="/login"
+                  className="text-ink-800 underline underline-offset-2 font-medium"
+                >
+                  로그인
                 </Link>
               </p>
             </form>
-
-            <div className="mt-8 p-3 rounded-lg bg-paper-200 text-xs text-ink-600">
-              <div className="font-semibold text-ink-700 mb-1 text-[11px] uppercase tracking-wider">
-                개발용 계정
-              </div>
-              <div>admin@blogstudio.local / studio1234!</div>
-            </div>
           </CardContent>
         </Card>
 

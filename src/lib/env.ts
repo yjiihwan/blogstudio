@@ -14,7 +14,7 @@ export const env = {
     "AUTH_SECRET",
     "dev-secret-blog-studio-please-set-AUTH_SECRET"
   ),
-  APP_URL: required("APP_URL", "http://localhost:3000"),
+  APP_URL: required("APP_URL", "http://localhost:3001"),
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
   ANTHROPIC_MODEL_DRAFT:
     process.env.ANTHROPIC_MODEL_DRAFT ?? "claude-sonnet-4-6",

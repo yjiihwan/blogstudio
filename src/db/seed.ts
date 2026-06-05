@@ -23,7 +23,8 @@ async function main() {
     email: "admin@blogstudio.local",
     passwordHash: await hashPassword("studio1234!"),
     name: "스튜디오 관리자",
-    role: "owner",
+    role: "admin",
+    status: "approved",
   });
 
   // Sample blog 1 — 맛집 리뷰

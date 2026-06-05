@@ -13,7 +13,17 @@ import {
   Newspaper,
   Sparkles,
 } from "lucide-react";
-import { hasAnthropic } from "@/lib/env";
+import { env } from "@/lib/env";
+
+async function hasAnthropicKey(): Promise<boolean> {
+  if (env.ANTHROPIC_API_KEY) return true;
+  const row = await db.query.settings.findFirst({
+    where: eq(schema.settings.key, "anthropic_api_key"),
+  });
+  if (!row) return false;
+  const k = JSON.parse(row.valueJson) as string;
+  return !!k;
+}
 
 export default async function Dashboard() {
   const [pending] = await db
@@ -46,6 +56,8 @@ export default async function Dashboard() {
     limit: 6,
   });
 
+  const anthropicReady = await hasAnthropicKey();
+
   return (
     <div className="px-5 lg:px-10 py-8 lg:py-12 max-w-6xl mx-auto">
       <header className="mb-9">
@@ -55,7 +67,7 @@ export default async function Dashboard() {
         <h1 className="text-2xl lg:text-3xl font-black tracking-tight text-balance">
           오늘 검토할 글 {pending.n}편, 사진 요청 {photoReqs.n}건이 기다리고 있어요.
         </h1>
-        {!hasAnthropic() && (
+        {!anthropicReady && (
           <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-100 text-amber-500 text-xs font-semibold">
             <Sparkles className="size-3.5" />
             데모 모드 — Anthropic API 키 미연결. 설정 → API 키 등록 시 실제 생성 활성화

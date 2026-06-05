@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { ChipsInput } from "@/components/ui/chips-input";
 import { Sparkles, Info } from "lucide-react";
+import { SchedulePicker } from "@/components/ui/schedule-picker";
 
 export type PersonaEditorValues = {
   purpose: string;
@@ -312,23 +313,28 @@ export function PersonaEditor({
       {/* ============== SCHEDULE ============== */}
       <Section
         title="자동 생성 스케줄"
-        desc="cron 표현식 또는 간단 패턴을 사용합니다. 정확한 시간보다 약간 흔들어주면 더 자연스러워요."
+        desc="AI가 초안을 자동으로 만드는 요일과 시각을 설정합니다."
       >
-        <div className="grid sm:grid-cols-2 gap-4">
-          <Field
-            name="cron"
-            label="cron 표현식"
-            defaultValue={blog.cron}
-            placeholder="0 7 * * 1 (매주 월 07:00)"
-          />
-          <Field
-            name="jitterMin"
-            label="시간 흔들기 (분)"
-            type="number"
-            defaultValue={String(blog.jitterMin)}
-            hint="예: 60이면 예정 시각에서 ±60분 사이 랜덤 실행"
-          />
-        </div>
+        <SchedulePicker name="cron" defaultValue={blog.cron} />
+        <Field
+          name="jitterMin"
+          label="무작위 시간 흔들기"
+          render={
+            <select
+              id="jitterMin"
+              name="jitterMin"
+              defaultValue={String(blog.jitterMin)}
+              className="h-10 w-full rounded-lg border border-paper-300 bg-paper-50 px-3 text-sm focus:border-ink-700 focus:ring-2 focus:ring-ink-700/10 outline-none"
+            >
+              <option value="0">없음 (정확한 시각에 실행)</option>
+              <option value="15">약간 (±15분 사이 랜덤)</option>
+              <option value="30">보통 (±30분 사이 랜덤)</option>
+              <option value="60">많이 (±1시간 사이 랜덤)</option>
+              <option value="120">최대 (±2시간 사이 랜덤)</option>
+            </select>
+          }
+          hint="매번 조금씩 다른 시간에 올라오면 더 자연스러워 보입니다."
+        />
       </Section>
 
       <div className="space-y-2">
@@ -443,7 +449,7 @@ function SegmentChoice({
           key={o.value}
           type="button"
           onClick={() => onChange(o.value)}
-          className={`h-9 rounded-md text-xs font-semibold transition ${
+          className={`h-11 rounded-md text-xs font-semibold transition touch-manipulation ${
             value === o.value
               ? "bg-paper-50 text-ink-900 shadow-sm"
               : "text-ink-500 hover:text-ink-800"

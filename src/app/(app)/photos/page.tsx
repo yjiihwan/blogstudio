@@ -3,9 +3,9 @@ import { db, schema } from "@/db/client";
 import { eq, desc } from "drizzle-orm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Camera, FileEdit, CheckCircle2 } from "lucide-react";
+import { Camera, FileEdit } from "lucide-react";
 import { relativeTime } from "@/lib/utils";
+import { PhotoUploadForm } from "./photo-upload-form";
 
 export const dynamic = "force-dynamic";
 
@@ -72,24 +72,7 @@ export default async function PhotosPage() {
                   </div>
                 </div>
 
-                <label className="mt-4 block rounded-lg border-2 border-dashed border-paper-300 px-4 py-6 text-center cursor-pointer hover:border-accent-400 hover:bg-accent-50/50 transition">
-                  <Camera className="size-5 text-ink-400 mx-auto mb-1.5" />
-                  <div className="text-xs font-semibold text-ink-700">
-                    사진 촬영·업로드
-                  </div>
-                  <div className="text-[10px] text-ink-400 mt-0.5">
-                    JPG / PNG / HEIC, 최대 10MB
-                  </div>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                  />
-                </label>
-                <Button variant="ghost" size="sm" className="w-full mt-2 text-ink-400">
-                  사진 없이 진행 (자동 이미지로 대체)
-                </Button>
+                <PhotoUploadForm requestId={r.id} />
               </CardContent>
             </Card>
           ))}

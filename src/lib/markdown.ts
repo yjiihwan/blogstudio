@@ -124,10 +124,10 @@ function inline(s: string) {
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
-  out = out.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>'
-  );
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
+    const safe = /^(https?:|\/|#)/.test(url) ? url : "#";
+    return `<a href="${safe}" target="_blank" rel="noopener">${text}</a>`;
+  });
   return out;
 }
 

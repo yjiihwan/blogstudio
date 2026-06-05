@@ -8,11 +8,11 @@
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
 import { generateDraftForBlog } from "@/lib/pipeline";
-import { parseExpression } from "cron-parser";
+import { CronExpressionParser } from "cron-parser";
 
 function nextRun(cron: string, jitterMin: number, from = new Date()) {
   try {
-    const it = parseExpression(cron, { currentDate: from });
+    const it = CronExpressionParser.parse(cron, { currentDate: from });
     const base = it.next().toDate();
     const offsetMs =
       (Math.random() * 2 - 1) * jitterMin * 60_000;

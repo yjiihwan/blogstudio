@@ -58,7 +58,7 @@ export function ChipsInput({
           <button
             type="button"
             onClick={() => setItems(items.filter((x) => x !== it))}
-            className="opacity-60 hover:opacity-100"
+            className="opacity-60 hover:opacity-100 active:opacity-100 touch-manipulation p-1 -m-1 rounded"
           >
             <X className="size-3" />
           </button>

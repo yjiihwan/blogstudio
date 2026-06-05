@@ -10,12 +10,14 @@ import { reviseDraftWithFeedback } from "@/lib/pipeline";
 export async function saveDraftAction(formData: FormData) {
   await requireUser();
   const id = String(formData.get("draftId"));
+  const bodyMd = String(formData.get("bodyMd") ?? "");
   await db
     .update(schema.drafts)
     .set({
       title: String(formData.get("title") ?? ""),
       summary: String(formData.get("summary") ?? "") || null,
-      bodyMd: String(formData.get("bodyMd") ?? ""),
+      bodyMd,
+      charCount: bodyMd.replace(/\s+/g, "").length,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(schema.drafts.id, id));
@@ -31,12 +33,14 @@ export async function approveDraftAction(formData: FormData) {
   if (!draft) return;
 
   /* Save any inline edits along with approval */
+  const bodyMd = String(formData.get("bodyMd") ?? draft.bodyMd);
   await db
     .update(schema.drafts)
     .set({
       title: String(formData.get("title") ?? draft.title),
       summary: String(formData.get("summary") ?? draft.summary ?? "") || null,
-      bodyMd: String(formData.get("bodyMd") ?? draft.bodyMd),
+      bodyMd,
+      charCount: bodyMd.replace(/\s+/g, "").length,
       status: "approved",
       updatedAt: new Date().toISOString(),
     })

@@ -16,6 +16,7 @@ import {
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { env } from "./env";
+import { sendTelegramNotification } from "./telegram";
 
 function safeJson<T = unknown>(text: string): T | null {
   // Tolerate code fences if the model slipped
@@ -280,6 +281,11 @@ export async function generateDraftForBlog(blogId: string) {
     linkUrl: `/queue/${draft.id}`,
     channel: "inapp",
   });
+
+  // Fire-and-forget: telegram notification (no-op if not configured)
+  void sendTelegramNotification(
+    `📝 <b>초안 준비됨</b> — ${blog.displayName}\n${draft.title}`
+  );
 
   return draft;
 }

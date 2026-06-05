@@ -1,15 +1,28 @@
 /**
  * LLM facade — single interface used by the rest of the app. Real Anthropic
- * SDK call when ANTHROPIC_API_KEY is set; otherwise returns a high-quality
- * deterministic mock so the whole pipeline is testable end-to-end without a
- * key.
+ * SDK call when ANTHROPIC_API_KEY is set (env or DB); otherwise returns a
+ * high-quality deterministic mock so the whole pipeline is testable end-to-end
+ * without a key.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { env, hasAnthropic } from "@/lib/env";
+import { env } from "@/lib/env";
+import { db, schema } from "@/db/client";
+import { eq } from "drizzle-orm";
 
-const client = hasAnthropic()
-  ? new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
-  : null;
+async function resolveKey(): Promise<string | null> {
+  try {
+    const row = await db.query.settings.findFirst({
+      where: eq(schema.settings.key, "anthropic_api_key"),
+    });
+    if (row) {
+      const k = JSON.parse(row.valueJson) as string;
+      if (k) return k;
+    }
+  } catch {
+    // DB read failure → fall through to env
+  }
+  return env.ANTHROPIC_API_KEY || null;
+}
 
 export type LLMMessage = { role: "user" | "assistant"; content: string };
 
@@ -49,6 +62,8 @@ function costFor(model: string, inT: number, outT: number) {
 
 export async function llm(opts: LLMOptions): Promise<LLMResult> {
   const model = opts.model ?? env.ANTHROPIC_MODEL_DRAFT;
+  const apiKey = opts.forceMock ? null : await resolveKey();
+  const client = apiKey ? new Anthropic({ apiKey }) : null;
 
   if (!client || opts.forceMock) {
     const text = opts.mockResponder

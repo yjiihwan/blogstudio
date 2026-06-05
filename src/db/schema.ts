@@ -18,9 +18,15 @@ export const users = sqliteTable("users", {
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   name: text("name").notNull(),
-  role: text("role", { enum: ["owner", "editor", "viewer"] })
+  role: text("role", { enum: ["admin", "user"] })
     .notNull()
-    .default("owner"),
+    .default("user"),
+  status: text("status", { enum: ["pending", "approved", "rejected"] })
+    .notNull()
+    .default("pending"),
+  isActive: integer("is_active", { mode: "boolean" })
+    .notNull()
+    .default(true),
   ...timestamps,
 });
 

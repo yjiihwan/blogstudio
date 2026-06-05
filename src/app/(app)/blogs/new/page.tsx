@@ -1,9 +1,15 @@
 import Link from "next/link";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, AlertCircle } from "lucide-react";
 import { PersonaEditor } from "@/components/persona-editor";
 import { createBlogAction } from "../actions";
 
-export default function NewBlogPage() {
+export default async function NewBlogPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
+
   return (
     <div className="px-5 lg:px-10 py-8 lg:py-12 max-w-3xl mx-auto">
       <div className="mb-4">
@@ -27,6 +33,13 @@ export default function NewBlogPage() {
           처음에는 빠진 부분 있어도 괜찮습니다 — 나중에 다듬을 수 있어요.
         </p>
       </header>
+
+      {error && (
+        <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="size-4 shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
       <PersonaEditor
         mode="create"
         action={createBlogAction}

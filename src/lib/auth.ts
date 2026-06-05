@@ -12,7 +12,7 @@ const secret = new TextEncoder().encode(env.AUTH_SECRET);
 
 export type SessionPayload = JWTPayload & {
   uid: string;
-  role: "owner" | "editor" | "viewer";
+  role: "admin" | "user";
 };
 
 export async function signSession(
@@ -59,7 +59,8 @@ export async function getCurrentUser() {
   const u = await db.query.users.findFirst({
     where: eq(schema.users.id, session.uid),
   });
-  return u ?? null;
+  if (!u || !u.isActive) return null;
+  return u;
 }
 
 export async function requireUser() {
@@ -68,8 +69,11 @@ export async function requireUser() {
   return u;
 }
 
-export async function requireOwner() {
+export async function requireAdmin() {
   const u = await requireUser();
-  if (u.role !== "owner") throw new Error("FORBIDDEN");
+  if (u.role !== "admin") throw new Error("FORBIDDEN");
   return u;
 }
+
+/** @deprecated alias kept for future use — prefer requireAdmin() */
+export const requireOwner = requireAdmin;

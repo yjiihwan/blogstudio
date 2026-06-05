@@ -6,14 +6,27 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { generateNewDraftAction } from "../[id]/actions";
-import { hasAnthropic } from "@/lib/env";
+import { env } from "@/lib/env";
+
+async function hasAnthropicKey(): Promise<boolean> {
+  if (env.ANTHROPIC_API_KEY) return true;
+  const row = await db.query.settings.findFirst({
+    where: eq(schema.settings.key, "anthropic_api_key"),
+  });
+  if (!row) return false;
+  const k = JSON.parse(row.valueJson) as string;
+  return !!k;
+}
 
 export default async function NewDraftPage() {
-  const blogs = await db.query.blogs.findMany({
-    where: eq(schema.blogs.status, "active"),
-    orderBy: asc(schema.blogs.displayName),
-    with: { personas: true },
-  });
+  const [blogs, anthropicReady] = await Promise.all([
+    db.query.blogs.findMany({
+      where: eq(schema.blogs.status, "active"),
+      orderBy: asc(schema.blogs.displayName),
+      with: { personas: true },
+    }),
+    hasAnthropicKey(),
+  ]);
 
   return (
     <div className="px-5 lg:px-10 py-8 lg:py-12 max-w-3xl mx-auto">
@@ -40,7 +53,7 @@ export default async function NewDraftPage() {
         </p>
       </header>
 
-      {!hasAnthropic() && (
+      {!anthropicReady && (
         <div className="mb-5 rounded-lg bg-amber-100 border border-amber-500/20 px-4 py-3 text-sm text-amber-500">
           <div className="font-semibold mb-0.5">데모 모드</div>
           Anthropic API 키 미연결 — 자리표시 텍스트로 생성됩니다. 실제 글은 설정 → API 키 등록 후 활성화됩니다.

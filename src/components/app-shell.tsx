@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import { ReactNode } from "react";
+import { MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; icon?: ReactNode };
@@ -12,9 +15,12 @@ export function AppShell({
 }: {
   navItems: NavItem[];
   currentPath: string;
-  user: { name: string; email: string };
+  user: { name: string; email: string; role?: string };
   children: ReactNode;
 }) {
+  const primaryTabs = navItems.slice(0, 4);
+  const extraTabs = navItems.slice(4);
+
   return (
     <div className="min-h-screen bg-paper-100">
       <aside className="hidden lg:flex fixed inset-y-0 left-0 w-60 flex-col border-r border-paper-300 bg-paper-50">
@@ -71,7 +77,7 @@ export function AppShell({
             <form action="/logout" method="post">
               <button
                 type="submit"
-                className="text-[11px] text-ink-400 hover:text-ink-800"
+                className="text-[11px] text-ink-400 hover:text-ink-800 touch-manipulation px-2 py-1.5"
               >
                 나가기
               </button>
@@ -88,16 +94,22 @@ export function AppShell({
           <div className="text-sm font-bold">Blog Studio</div>
         </Link>
         <form action="/logout" method="post">
-          <button type="submit" className="text-xs text-ink-500">
+          <button type="submit" className="text-xs text-ink-500 touch-manipulation px-3 py-2">
             나가기
           </button>
         </form>
       </header>
 
-      <main className="lg:pl-60 min-h-screen pb-16 lg:pb-0">{children}</main>
+      <main
+        className="lg:pl-60 min-h-screen lg:pb-0"
+        style={{ paddingBottom: "calc(3.5rem + env(safe-area-inset-bottom))" }}
+      >{children}</main>
 
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-paper-50 border-t border-paper-300 grid grid-cols-4 h-14">
-        {navItems.slice(0, 4).map((item) => {
+      <nav
+        className="lg:hidden fixed bottom-0 inset-x-0 z-[100] bg-paper-50 border-t border-paper-300 grid grid-cols-5"
+        style={{ height: "calc(3.5rem + env(safe-area-inset-bottom))", paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        {primaryTabs.map((item) => {
           const active =
             currentPath === item.href ||
             currentPath.startsWith(item.href + "/");
@@ -115,6 +127,18 @@ export function AppShell({
             </Link>
           );
         })}
+        {extraTabs.length > 0 && (
+          <Link
+            href="/more"
+            className={cn(
+              "flex flex-col items-center justify-center gap-0.5 text-[11px]",
+              currentPath === "/more" ? "text-ink-900" : "text-ink-400"
+            )}
+          >
+            <MoreHorizontal className="size-5 shrink-0" />
+            더보기
+          </Link>
+        )}
       </nav>
     </div>
   );
