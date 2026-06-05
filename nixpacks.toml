@@ -1,11 +1,12 @@
 [phases.setup]
 nixPkgs = ["nodejs_20", "python3", "gcc", "gnumake"]
+aptPkgs = []
 
 [phases.install]
-cmds = ["npm ci"]
+cmds = ["npm ci --ignore-scripts=false"]
 
 [phases.build]
-cmds = ["npm run build"]
+cmds = ["npm run build", "cp -r drizzle .next/standalone/drizzle"]
 
 [start]
 cmd = "node .next/standalone/server.js"
