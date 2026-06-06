@@ -6,7 +6,11 @@ aptPkgs = []
 cmds = ["npm ci --ignore-scripts=false"]
 
 [phases.build]
-cmds = ["npm run build", "cp -r drizzle .next/standalone/drizzle"]
+cmds = [
+  "npm run build",
+  "cp -r drizzle .next/standalone/drizzle",
+  "cp -r node_modules/better-sqlite3 .next/standalone/node_modules/better-sqlite3"
+]
 
 [start]
 cmd = "node .next/standalone/server.js"
