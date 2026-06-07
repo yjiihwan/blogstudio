@@ -3,14 +3,10 @@ nixPkgs = ["nodejs_20", "python3", "gcc", "gnumake"]
 aptPkgs = []
 
 [phases.install]
-cmds = ["npm ci --ignore-scripts=false"]
+cmds = ["npm ci"]
 
 [phases.build]
-cmds = [
-  "npm run build",
-  "cp -r drizzle .next/standalone/drizzle",
-  "cp -r node_modules/better-sqlite3 .next/standalone/node_modules/better-sqlite3"
-]
+cmds = ["npm run build"]
 
 [start]
-cmd = "node .next/standalone/server.js"
+cmd = "npm start"

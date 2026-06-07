@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && cp -r public .next/standalone/public && cp -r .next/static .next/standalone/.next/static",
+    "build": "next build",
     "start": "next start",
     "start:prod": "node .next/standalone/server.js",
     "db:generate": "drizzle-kit generate",
