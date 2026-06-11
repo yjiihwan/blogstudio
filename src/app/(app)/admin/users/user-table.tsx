@@ -7,6 +7,8 @@ import {
   deleteUserAction,
   approveUserAction,
   rejectUserAction,
+  setApiKeyModeAction,
+  setImageApiKeyModeAction,
 } from "./actions";
 
 type User = {
@@ -16,6 +18,8 @@ type User = {
   role: "admin" | "user";
   status: "pending" | "approved" | "rejected";
   isActive: boolean;
+  apiKeyMode: "system" | "user_key";
+  imageApiKeyMode: "system" | "user_key";
   createdAt: string;
 };
 
@@ -29,6 +33,8 @@ export function UserTable({ users, meId }: { users: User[]; meId: string }) {
             <th className="px-4 py-3 text-left font-semibold text-ink-700">이메일</th>
             <th className="px-4 py-3 text-left font-semibold text-ink-700">역할</th>
             <th className="px-4 py-3 text-left font-semibold text-ink-700">승인 상태</th>
+            <th className="px-4 py-3 text-left font-semibold text-ink-700">AI 키</th>
+            <th className="px-4 py-3 text-left font-semibold text-ink-700">이미지 키</th>
             <th className="px-4 py-3 text-left font-semibold text-ink-700">가입일</th>
             <th className="px-4 py-3 text-right font-semibold text-ink-700">작업</th>
           </tr>
@@ -97,6 +103,16 @@ function UserRow({ user: u, isSelf }: { user: User; isSelf: boolean }) {
     startTransition(() => rejectUserAction(u.id));
   };
 
+  const handleApiKeyMode = () => {
+    const next = u.apiKeyMode === "system" ? "user_key" : "system";
+    startTransition(() => setApiKeyModeAction(u.id, next));
+  };
+
+  const handleImageApiKeyMode = () => {
+    const next = u.imageApiKeyMode === "system" ? "user_key" : "system";
+    startTransition(() => setImageApiKeyModeAction(u.id, next));
+  };
+
   const isPending = u.status === "pending";
 
   return (
@@ -127,6 +143,40 @@ function UserRow({ user: u, isSelf }: { user: User; isSelf: boolean }) {
       </td>
       <td className="px-4 py-3">
         <StatusBadge status={u.status} />
+      </td>
+      <td className="px-4 py-3">
+        {u.role === "admin" ? (
+          <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-paper-200 text-ink-500">
+            시스템
+          </span>
+        ) : (
+          <span
+            className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${
+              u.apiKeyMode === "user_key"
+                ? "bg-blue-100 text-blue-700 border border-blue-200"
+                : "bg-paper-200 text-ink-600"
+            }`}
+          >
+            {u.apiKeyMode === "user_key" ? "유저 키" : "시스템"}
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3">
+        {u.role === "admin" ? (
+          <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-paper-200 text-ink-500">
+            시스템
+          </span>
+        ) : (
+          <span
+            className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${
+              u.imageApiKeyMode === "user_key"
+                ? "bg-purple-100 text-purple-700 border border-purple-200"
+                : "bg-paper-200 text-ink-600"
+            }`}
+          >
+            {u.imageApiKeyMode === "user_key" ? "유저 키" : "시스템"}
+          </span>
+        )}
       </td>
       <td className="px-4 py-3 text-ink-500 text-xs">{u.createdAt.slice(0, 10)}</td>
       <td className="px-4 py-3">
@@ -159,6 +209,34 @@ function UserRow({ user: u, isSelf }: { user: User; isSelf: boolean }) {
                 >
                   {u.role === "admin" ? "→ 일반" : "→ 관리자"}
                 </button>
+                {u.role !== "admin" && (
+                  <button
+                    onClick={handleApiKeyMode}
+                    disabled={pending}
+                    title={
+                      u.apiKeyMode === "system"
+                        ? "유저 키 모드로 전환 (유저가 직접 API 키 입력)"
+                        : "시스템 모드로 전환 (운영자 키 사용)"
+                    }
+                    className="text-xs px-2.5 py-1 rounded-lg border border-blue-200 hover:border-blue-400 text-blue-600 hover:text-blue-800 transition disabled:opacity-40"
+                  >
+                    AI {u.apiKeyMode === "system" ? "→ 유저 키" : "→ 시스템"}
+                  </button>
+                )}
+                {u.role !== "admin" && (
+                  <button
+                    onClick={handleImageApiKeyMode}
+                    disabled={pending}
+                    title={
+                      u.imageApiKeyMode === "system"
+                        ? "이미지 유저 키 모드로 전환 (유저가 직접 이미지 API 키 입력)"
+                        : "이미지 시스템 모드로 전환 (운영자 키 사용)"
+                    }
+                    className="text-xs px-2.5 py-1 rounded-lg border border-purple-200 hover:border-purple-400 text-purple-600 hover:text-purple-800 transition disabled:opacity-40"
+                  >
+                    이미지 {u.imageApiKeyMode === "system" ? "→ 유저 키" : "→ 시스템"}
+                  </button>
+                )}
                 <button
                   onClick={handleToggle}
                   disabled={pending}

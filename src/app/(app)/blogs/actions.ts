@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
-import { requireUser } from "@/lib/auth";
+import { getAccessibleBlog, requireUser } from "@/lib/auth";
 
 function readPayload(formData: FormData) {
   return {
@@ -59,7 +59,7 @@ function readPayload(formData: FormData) {
 }
 
 export async function createBlogAction(formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const { blog, persona, schedule } = readPayload(formData);
   if (!blog.naverBlogId || !blog.displayName) {
     redirect(
@@ -68,7 +68,11 @@ export async function createBlogAction(formData: FormData) {
       )}`
     );
   }
-  const [created] = await db.insert(schema.blogs).values(blog).returning();
+  // 신규 블로그는 생성한 세션 유저 소유로 자동 귀속
+  const [created] = await db
+    .insert(schema.blogs)
+    .values({ ...blog, ownerId: user.id })
+    .returning();
 
   await db.insert(schema.personas).values({
     blogId: created.id,
@@ -103,9 +107,11 @@ export async function createBlogAction(formData: FormData) {
 }
 
 export async function updateBlogAction(formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const id = String(formData.get("id"));
   if (!id) return;
+  // 소유권 검증: 타인 블로그 수정 차단
+  if (!(await getAccessibleBlog(id, user))) throw new Error("FORBIDDEN");
   const { blog, persona, schedule } = readPayload(formData);
 
   await db

@@ -2,7 +2,6 @@ import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
 
 export const TELEGRAM_TOKEN_KEY = "telegram_bot_token";
-export const TELEGRAM_CHAT_ID_KEY = "telegram_chat_id";
 
 async function getSetting(key: string): Promise<string | null> {
   const row = await db.query.settings.findFirst({
@@ -12,32 +11,70 @@ async function getSetting(key: string): Promise<string | null> {
   return JSON.parse(row.valueJson) as string | null;
 }
 
-export async function sendTelegramNotification(
-  message: string
-): Promise<{ ok: boolean; error?: string }> {
-  const [token, chatId] = await Promise.all([
-    getSetting(TELEGRAM_TOKEN_KEY),
-    getSetting(TELEGRAM_CHAT_ID_KEY),
-  ]);
-  if (!token || !chatId) return { ok: false, error: "Telegram 설정 없음" };
+async function getBotToken(): Promise<string | null> {
+  return getSetting(TELEGRAM_TOKEN_KEY);
+}
 
-  try {
-    const res = await fetch(
-      `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: "HTML" }),
-        cache: "no-store",
-      }
-    );
-    if (res.ok) return { ok: true };
+async function sendMessage(
+  token: string,
+  chatId: string,
+  message: string
+): Promise<void> {
+  const res = await fetch(
+    `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: "HTML" }),
+      cache: "no-store",
+    }
+  );
+  if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { description?: string };
-    return { ok: false, error: data.description ?? `HTTP ${res.status}` };
+    console.error("[telegram] sendMessage failed:", data.description ?? `HTTP ${res.status}`);
+  }
+}
+
+// NOTE: 전역 단일 Chat ID 기반 알림(sendTelegramNotification)은 제거됨.
+// 알림은 계정별 sendTelegramToUser()로 발송한다.
+// 추후 어드민 전체 공지가 필요하면 sendTelegramToAdmins()를 사용한다.
+
+/** Send a message to a specific user's telegramChatId. No-op if not configured. */
+export async function sendTelegramToUser(
+  userId: string,
+  message: string
+): Promise<void> {
+  try {
+    const token = await getBotToken();
+    if (!token) return;
+
+    const user = await db.query.users.findFirst({
+      where: eq(schema.users.id, userId),
+    });
+    if (!user?.telegramChatId) return;
+
+    await sendMessage(token, user.telegramChatId, message);
   } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
+    console.error("[telegram] sendTelegramToUser failed:", err);
+  }
+}
+
+/** Send a message to all admin users who have telegramChatId set. */
+export async function sendTelegramToAdmins(message: string): Promise<void> {
+  try {
+    const token = await getBotToken();
+    if (!token) return;
+
+    const admins = await db.query.users.findMany({
+      where: eq(schema.users.role, "admin"),
+    });
+
+    await Promise.allSettled(
+      admins
+        .filter((a) => a.telegramChatId)
+        .map((a) => sendMessage(token, a.telegramChatId!, message))
+    );
+  } catch (err) {
+    console.error("[telegram] sendTelegramToAdmins failed:", err);
   }
 }

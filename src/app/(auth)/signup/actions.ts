@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
 import { hashPassword } from "@/lib/auth/passwords";
-import { sendTelegramNotification } from "@/lib/telegram";
+import { sendTelegramToAdmins } from "@/lib/telegram";
 
 export async function signupAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
@@ -39,8 +39,8 @@ export async function signupAction(formData: FormData) {
   });
 
   // 텔레그램 알림 (실패해도 가입 흐름에 영향 없음)
-  sendTelegramNotification(
-    `🆕 <b>신규 가입 신청</b>\n이름: ${name}\n이메일: ${email}\n\n승인 대기 중 — <a href="/admin/users">사용자 관리</a>에서 처리해주세요.`
+  sendTelegramToAdmins(
+    `🆕 새 회원가입 대기\n이름: ${name}\n이메일: ${email}\n승인 필요`
   ).catch(() => null);
 
   redirect("/login?pending=1");

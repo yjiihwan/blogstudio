@@ -8,6 +8,55 @@
       "when": 1780381329257,
       "tag": "0000_clever_red_ghost",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1780381400000,
+      "tag": "0001_multi_user_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1780381500000,
+      "tag": "0002_user_status_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1749428000000,
+      "tag": "0003_user_api_key_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1780983129375,
+      "tag": "0004_burly_mattie_franklin",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1781157092713,
+      "tag": "0005_image_api_key_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1781286000000,
+      "tag": "0006_user_telegram_chat_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1781372400000,
+      "tag": "0007_blog_owner",
+      "breakpoints": true
     }
   ]
 }

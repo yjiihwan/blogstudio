@@ -11,6 +11,7 @@ import {
   Settings,
   CalendarClock,
   Users,
+  UserCircle,
 } from "lucide-react";
 
 export default async function AppLayout({
@@ -36,6 +37,7 @@ export default async function AppLayout({
         { href: "/schedule", label: "스케줄", icon: <CalendarClock className="size-5" /> },
         { href: "/insights", label: "노출 분석", icon: <BarChart3 className="size-5" /> },
         { href: "/settings", label: "설정", icon: <Settings className="size-5" /> },
+        { href: "/account", label: "내 계정", icon: <UserCircle className="size-5" /> },
         ...(user.role === "admin"
           ? [{ href: "/admin/users", label: "사용자 관리", icon: <Users className="size-5" /> }]
           : []),

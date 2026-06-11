@@ -8,8 +8,28 @@ import Anthropic from "@anthropic-ai/sdk";
 import { env } from "@/lib/env";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
+import { decryptApiKey } from "@/lib/crypto";
 
-async function resolveKey(): Promise<string | null> {
+async function resolveKey(userId?: string): Promise<string | null> {
+  // Per-user key mode: user_key → decrypt user's stored API key
+  if (userId) {
+    try {
+      const user = await db.query.users.findFirst({
+        where: eq(schema.users.id, userId),
+      });
+      if (user?.apiKeyMode === "user_key") {
+        if (!user.openaiApiKey) {
+          throw new Error("USER_API_KEY_MISSING");
+        }
+        return decryptApiKey(user.openaiApiKey);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === "USER_API_KEY_MISSING") throw err;
+      // DB/decrypt error → fall through to system key
+    }
+  }
+
+  // System mode: check settings table, then env
   try {
     const row = await db.query.settings.findFirst({
       where: eq(schema.settings.key, "anthropic_api_key"),
@@ -24,6 +44,13 @@ async function resolveKey(): Promise<string | null> {
   return env.ANTHROPIC_API_KEY || null;
 }
 
+export class CreditExhaustedError extends Error {
+  constructor() {
+    super("API 크레딧이 소진되었습니다. 관리자에게 문의해주세요.");
+    this.name = "CreditExhaustedError";
+  }
+}
+
 export type LLMMessage = { role: "user" | "assistant"; content: string };
 
 export type LLMOptions = {
@@ -35,6 +62,8 @@ export type LLMOptions = {
   forceMock?: boolean;
   /** Override (for tests) returning a deterministic completion. */
   mockResponder?: (msgs: LLMMessage[]) => string;
+  /** If provided, resolves the API key from this user's api_key_mode setting. */
+  callerUserId?: string;
 };
 
 export type LLMResult = {
@@ -62,7 +91,7 @@ function costFor(model: string, inT: number, outT: number) {
 
 export async function llm(opts: LLMOptions): Promise<LLMResult> {
   const model = opts.model ?? env.ANTHROPIC_MODEL_DRAFT;
-  const apiKey = opts.forceMock ? null : await resolveKey();
+  const apiKey = opts.forceMock ? null : await resolveKey(opts.callerUserId);
   const client = apiKey ? new Anthropic({ apiKey }) : null;
 
   if (!client || opts.forceMock) {
@@ -83,12 +112,27 @@ export async function llm(opts: LLMOptions): Promise<LLMResult> {
     };
   }
 
-  const res = await client.messages.create({
-    model,
-    max_tokens: opts.maxTokens ?? 4096,
-    system: opts.system,
-    messages: opts.messages,
-  });
+  let res: Awaited<ReturnType<typeof client.messages.create>>;
+  try {
+    res = await client.messages.create({
+      model,
+      max_tokens: opts.maxTokens ?? 4096,
+      system: opts.system,
+      messages: opts.messages,
+    });
+  } catch (err) {
+    if (err instanceof Anthropic.APIError) {
+      const errType = (err.error as { type?: string } | null)?.type;
+      if (
+        err.status === 402 ||
+        errType === "credit_balance_exceeded" ||
+        errType === "insufficient_quota"
+      ) {
+        throw new CreditExhaustedError();
+      }
+    }
+    throw err;
+  }
 
   const text =
     res.content

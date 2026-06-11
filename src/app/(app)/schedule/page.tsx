@@ -5,10 +5,13 @@ import { Badge } from "@/components/ui/badge";
 import { CalendarClock } from "lucide-react";
 import { formatDateTime } from "@/lib/utils";
 import { parseCronToHuman } from "@/lib/cron-utils";
+import { requireUser, scopeByBlogId } from "@/lib/auth";
 import Link from "next/link";
 
 export default async function SchedulePage() {
+  const user = await requireUser();
   const schedules = await db.query.schedules.findMany({
+    where: await scopeByBlogId(user, schema.schedules.blogId),
     with: { blog: true },
     orderBy: asc(schema.schedules.createdAt),
   });

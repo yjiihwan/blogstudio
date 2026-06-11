@@ -27,6 +27,17 @@ export const users = sqliteTable("users", {
   isActive: integer("is_active", { mode: "boolean" })
     .notNull()
     .default(true),
+  apiKeyMode: text("api_key_mode", { enum: ["system", "user_key"] })
+    .notNull()
+    .default("user_key"),
+  openaiApiKey: text("openai_api_key"),
+  imageApiKeyMode: text("image_api_key_mode", { enum: ["system", "user_key"] })
+    .notNull()
+    .default("system"),
+  unsplashKey: text("unsplash_key"),
+  pexelsKey: text("pexels_key"),
+  googleAiKey: text("google_ai_key"),
+  telegramChatId: text("telegram_chat_id"),
   ...timestamps,
 });
 
@@ -35,6 +46,11 @@ export const users = sqliteTable("users", {
    ========================================================================= */
 export const blogs = sqliteTable("blogs", {
   id: id(),
+  /* Owner — the user who created/owns this blog. Admins see all blogs;
+     everyone else only sees blogs where ownerId === their id. All child
+     data (drafts, personas, schedules, …) cascade off blogs, so scoping
+     blog access is enough to isolate the whole workspace per account. */
+  ownerId: text("owner_id").references(() => users.id),
   /* Naver blog ID (the part after blog.naver.com/) */
   naverBlogId: text("naver_blog_id").notNull(),
   displayName: text("display_name").notNull(),       // 내부 표시명
@@ -346,7 +362,8 @@ export const settings = sqliteTable("settings", {
 /* =========================================================================
    RELATIONS
    ========================================================================= */
-export const blogsRelations = relations(blogs, ({ many }) => ({
+export const blogsRelations = relations(blogs, ({ one, many }) => ({
+  owner: one(users, { fields: [blogs.ownerId], references: [users.id] }),
   personas: many(personas),
   drafts: many(drafts),
   schedules: many(schedules),

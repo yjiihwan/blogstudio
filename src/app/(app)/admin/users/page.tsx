@@ -44,6 +44,8 @@ export default async function AdminUsersPage() {
           role: u.role as "admin" | "user",
           status: u.status as "pending" | "approved" | "rejected",
           isActive: u.isActive,
+          apiKeyMode: (u.apiKeyMode ?? "system") as "system" | "user_key",
+          imageApiKeyMode: (u.imageApiKeyMode ?? "system") as "system" | "user_key",
           createdAt: u.createdAt,
         }))}
         meId={me.id}

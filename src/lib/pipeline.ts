@@ -16,7 +16,7 @@ import {
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { env } from "./env";
-import { sendTelegramNotification } from "./telegram";
+import { sendTelegramToUser } from "./telegram";
 
 function safeJson<T = unknown>(text: string): T | null {
   // Tolerate code fences if the model slipped
@@ -66,7 +66,14 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
    PUBLIC ENTRY POINTS
    ============================================================ */
 
-export async function generateDraftForBlog(blogId: string) {
+export class UserApiKeyMissingError extends Error {
+  constructor() {
+    super("API 키를 먼저 입력해주세요. 설정 → 내 API 키에서 Anthropic 키를 등록하면 글 생성이 가능합니다.");
+    this.name = "UserApiKeyMissingError";
+  }
+}
+
+export async function generateDraftForBlog(blogId: string, callerUserId?: string) {
   const blog = await db.query.blogs.findFirst({
     where: eq(schema.blogs.id, blogId),
     with: { personas: true },
@@ -99,6 +106,7 @@ export async function generateDraftForBlog(blogId: string) {
         }),
       },
     ],
+    callerUserId,
   });
 
   const topics =
@@ -154,6 +162,7 @@ export async function generateDraftForBlog(blogId: string) {
   const outlineRes = await llm({
     model: env.ANTHROPIC_MODEL_DRAFT,
     system: preamble,
+    callerUserId,
     messages: [
       {
         role: "user",
@@ -190,6 +199,7 @@ export async function generateDraftForBlog(blogId: string) {
   const bodyRes = await llm({
     model: env.ANTHROPIC_MODEL_DRAFT,
     system: preamble,
+    callerUserId,
     messages: [
       {
         role: "user",
@@ -265,7 +275,8 @@ export async function generateDraftForBlog(blogId: string) {
     reasonForChange: "최초 생성",
   });
 
-  for (const it of outline.imagePlan.filter((p) => p.needsUserShot)) {
+  const userShotItems = outline.imagePlan.filter((p) => p.needsUserShot);
+  for (const it of userShotItems) {
     await db.insert(schema.imageRequests).values({
       draftId: draft.id,
       slot: it.slot,
@@ -282,10 +293,19 @@ export async function generateDraftForBlog(blogId: string) {
     channel: "inapp",
   });
 
-  // Fire-and-forget: telegram notification (no-op if not configured)
-  void sendTelegramNotification(
-    `📝 <b>초안 준비됨</b> — ${blog.displayName}\n${draft.title}`
-  );
+  // Fire-and-forget: 계정별 텔레그램 알림 (전역 단일 발송 제거 — 중복 방지)
+  if (callerUserId) {
+    void sendTelegramToUser(
+      callerUserId,
+      `📝 새 초안이 생성되었습니다!\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
+    );
+    if (userShotItems.length > 0) {
+      void sendTelegramToUser(
+        callerUserId,
+        `🖼️ 이미지 업로드가 필요합니다!\n블로그: ${blog.displayName}\n요청된 이미지를 업로드해 주세요.`
+      );
+    }
+  }
 
   return draft;
 }
@@ -295,6 +315,7 @@ export async function reviseDraftWithFeedback(opts: {
   feedback: string;
   feedbackTags: string[];
   reviewerUserId?: string | null;
+  callerUserId?: string;
 }) {
   const draft = await db.query.drafts.findFirst({
     where: eq(schema.drafts.id, opts.draftId),
@@ -310,6 +331,7 @@ export async function reviseDraftWithFeedback(opts: {
   const res = await llm({
     model: env.ANTHROPIC_MODEL_DRAFT,
     system: preamble,
+    callerUserId: opts.callerUserId,
     messages: [
       {
         role: "user",

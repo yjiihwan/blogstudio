@@ -38,7 +38,8 @@ async function main() {
 
     console.log(`[cron] generating draft for ${s.blog.displayName}`);
     try {
-      const d = await generateDraftForBlog(s.blogId);
+      // 소유자 맥락으로 생성 — user_key 모드에서 소유자 API 키가 적용되도록
+      const d = await generateDraftForBlog(s.blogId, s.blog.ownerId ?? undefined);
       console.log(`  → draft ${d.id}`);
     } catch (e) {
       console.error(`  ✗ failed: ${(e as Error).message}`);

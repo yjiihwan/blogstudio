@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { DraftReview } from "@/components/draft-review";
 import { scoreHuman, scoreSeo } from "@/lib/scoring";
 import { relativeTime } from "@/lib/utils";
+import { getAccessibleDraft, requireUser } from "@/lib/auth";
 import {
   approveDraftAction,
   markPublishedAction,
@@ -23,6 +24,9 @@ export default async function DraftDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const user = await requireUser();
+  // 소유권 검증: 타인 초안 접근 시 404
+  if (!(await getAccessibleDraft(id, user))) notFound();
   const draft = await db.query.drafts.findFirst({
     where: eq(schema.drafts.id, id),
     with: {

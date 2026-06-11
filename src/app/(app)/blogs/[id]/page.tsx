@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { PersonaEditor } from "@/components/persona-editor";
 import { updateBlogAction } from "../actions";
 import { Badge } from "@/components/ui/badge";
+import { getAccessibleBlog, requireUser } from "@/lib/auth";
 
 export default async function BlogEditPage({
   params,
@@ -16,6 +17,9 @@ export default async function BlogEditPage({
 }) {
   const { id } = await params;
   const { saved } = await searchParams;
+  const user = await requireUser();
+  // 소유권 검증: 타인 블로그 접근 시 404
+  if (!(await getAccessibleBlog(id, user))) notFound();
   const blog = await db.query.blogs.findFirst({
     where: eq(schema.blogs.id, id),
     with: { personas: true, schedules: true },

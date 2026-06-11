@@ -5,9 +5,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Plus, ExternalLink } from "lucide-react";
+import { requireUser, scopeBlogsWhere } from "@/lib/auth";
 
 export default async function BlogsPage() {
+  const user = await requireUser();
   const blogs = await db.query.blogs.findMany({
+    where: scopeBlogsWhere(user),
     orderBy: asc(schema.blogs.createdAt),
     with: { personas: true, schedules: true, drafts: true },
   });

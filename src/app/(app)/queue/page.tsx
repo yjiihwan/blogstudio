@@ -8,6 +8,7 @@ import { DraftStatusBadge } from "@/components/status-badge";
 import { relativeTime, truncate } from "@/lib/utils";
 import { FileEdit, Sparkles, ImageIcon, ChevronLeft, ChevronRight } from "lucide-react";
 import { BlogFilter } from "@/components/blog-filter";
+import { requireUser, scopeByBlogId, scopeBlogsWhere } from "@/lib/auth";
 
 const STATUSES = [
   "ready_for_review",
@@ -26,11 +27,15 @@ export default async function QueuePage({
 }) {
   const { status, blog, page: pageParam } = await searchParams;
   const page = Math.max(1, parseInt(pageParam ?? "1") || 1);
+  const user = await requireUser();
 
   const conditions = [];
   if (status && STATUSES.includes(status as any))
     conditions.push(eq(schema.drafts.status, status as any));
   if (blog) conditions.push(eq(schema.drafts.blogId, blog));
+  // 격리: 일반 유저는 본인 소유 블로그의 초안만
+  const ownerScope = await scopeByBlogId(user, schema.drafts.blogId);
+  if (ownerScope) conditions.push(ownerScope);
 
   const whereClause = conditions.length ? and(...conditions) : undefined;
 
@@ -45,7 +50,9 @@ export default async function QueuePage({
   const hasNext = rows.length > PAGE_SIZE;
   const drafts = hasNext ? rows.slice(0, PAGE_SIZE) : rows;
 
-  const blogs = await db.query.blogs.findMany();
+  const blogs = await db.query.blogs.findMany({
+    where: scopeBlogsWhere(user),
+  });
 
   function pageHref(p: number) {
     const params = new URLSearchParams();

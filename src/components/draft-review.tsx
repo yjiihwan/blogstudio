@@ -44,7 +44,7 @@ export type ReviewProps = {
   /* Server actions */
   saveDraft: (formData: FormData) => Promise<void>;
   approveDraft: (formData: FormData) => Promise<void>;
-  rejectAndRevise: (formData: FormData) => Promise<void>;
+  rejectAndRevise: (formData: FormData) => Promise<{ error: string } | void>;
   markPublished: (formData: FormData) => Promise<void>;
 };
 
@@ -68,6 +68,7 @@ export function DraftReview(p: ReviewProps) {
   const [feedback, setFeedback] = useState("");
   const [pending, startTransition] = useTransition();
   const [copied, setCopied] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   function toggleTag(v: string) {
     const next = new Set(tags);
@@ -104,7 +105,13 @@ export function DraftReview(p: ReviewProps) {
     fd.set("draftId", p.draftId);
     fd.set("feedback", feedback);
     Array.from(tags).forEach((t) => fd.append("feedbackTags", t));
-    startTransition(() => p.rejectAndRevise(fd));
+    setActionError(null);
+    startTransition(async () => {
+      const result = await p.rejectAndRevise(fd);
+      if (result && "error" in result) {
+        setActionError(result.error);
+      }
+    });
   }
 
   async function copyAndOpenNaver() {
@@ -325,6 +332,11 @@ export function DraftReview(p: ReviewProps) {
                         placeholder="어떤 부분이 어떻게 다듬어졌으면 좋겠는지 구체적으로…"
                       />
                     </div>
+                    {actionError && (
+                      <div className="rounded bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                        {actionError}
+                      </div>
+                    )}
                     <Button
                       onClick={doReject}
                       disabled={pending || (!feedback && tags.size === 0)}

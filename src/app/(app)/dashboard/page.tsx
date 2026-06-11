@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { db, schema } from "@/db/client";
 import { and, count, desc, eq } from "drizzle-orm";
+import {
+  requireUser,
+  scopeBlogsWhere,
+  scopeByBlogId,
+  scopeByDraftId,
+} from "@/lib/auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,32 +32,38 @@ async function hasAnthropicKey(): Promise<boolean> {
 }
 
 export default async function Dashboard() {
+  const user = await requireUser();
+  // 격리 스코프: 일반 유저는 본인 소유 블로그 기준, 어드민은 전체(undefined)
+  const draftScope = await scopeByBlogId(user, schema.drafts.blogId);
+  const imageReqScope = await scopeByDraftId(user, schema.imageRequests.draftId);
+  const scheduleScope = await scopeByBlogId(user, schema.schedules.blogId);
+
   const [pending] = await db
     .select({ n: count() })
     .from(schema.drafts)
-    .where(eq(schema.drafts.status, "ready_for_review"));
+    .where(and(eq(schema.drafts.status, "ready_for_review"), draftScope));
   const [published] = await db
     .select({ n: count() })
     .from(schema.drafts)
-    .where(eq(schema.drafts.status, "published"));
+    .where(and(eq(schema.drafts.status, "published"), draftScope));
   const [photoReqs] = await db
     .select({ n: count() })
     .from(schema.imageRequests)
-    .where(eq(schema.imageRequests.status, "pending"));
+    .where(and(eq(schema.imageRequests.status, "pending"), imageReqScope));
   const [activeBlogs] = await db
     .select({ n: count() })
     .from(schema.blogs)
-    .where(eq(schema.blogs.status, "active"));
+    .where(and(eq(schema.blogs.status, "active"), scopeBlogsWhere(user)));
 
   const queue = await db.query.drafts.findMany({
-    where: eq(schema.drafts.status, "ready_for_review"),
+    where: and(eq(schema.drafts.status, "ready_for_review"), draftScope),
     with: { blog: true },
     orderBy: desc(schema.drafts.createdAt),
     limit: 5,
   });
 
   const upcoming = await db.query.schedules.findMany({
-    where: eq(schema.schedules.enabled, true),
+    where: and(eq(schema.schedules.enabled, true), scheduleScope),
     with: { blog: true },
     limit: 6,
   });

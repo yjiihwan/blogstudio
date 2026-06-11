@@ -1,17 +1,22 @@
 import Link from "next/link";
 import { db, schema } from "@/db/client";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Camera, FileEdit } from "lucide-react";
 import { relativeTime } from "@/lib/utils";
+import { requireUser, scopeByDraftId } from "@/lib/auth";
 import { PhotoUploadForm } from "./photo-upload-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function PhotosPage() {
+  const user = await requireUser();
   const reqs = await db.query.imageRequests.findMany({
-    where: eq(schema.imageRequests.status, "pending"),
+    where: and(
+      eq(schema.imageRequests.status, "pending"),
+      await scopeByDraftId(user, schema.imageRequests.draftId)
+    ),
     with: { draft: { with: { blog: true } } },
     orderBy: desc(schema.imageRequests.createdAt),
   });

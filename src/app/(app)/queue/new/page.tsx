@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { ChevronLeft, Sparkles } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { db, schema } from "@/db/client";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { generateNewDraftAction } from "../[id]/actions";
 import { env } from "@/lib/env";
+import { GenerateDraftButton } from "./GenerateDraftButton";
+import { requireUser, scopeBlogsWhere } from "@/lib/auth";
 
 async function hasAnthropicKey(): Promise<boolean> {
   if (env.ANTHROPIC_API_KEY) return true;
@@ -19,9 +19,10 @@ async function hasAnthropicKey(): Promise<boolean> {
 }
 
 export default async function NewDraftPage() {
+  const user = await requireUser();
   const [blogs, anthropicReady] = await Promise.all([
     db.query.blogs.findMany({
-      where: eq(schema.blogs.status, "active"),
+      where: and(eq(schema.blogs.status, "active"), scopeBlogsWhere(user)),
       orderBy: asc(schema.blogs.displayName),
       with: { personas: true },
     }),
@@ -68,29 +69,23 @@ export default async function NewDraftPage() {
             ? JSON.parse(persona.focusKeywordsJson || "[]")
             : [];
           return (
-            <form key={b.id} action={generateNewDraftAction}>
-              <input type="hidden" name="blogId" value={b.id} />
-              <Card className="transition hover:-translate-y-px hover:shadow-md">
-                <CardContent className="flex items-center gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Badge tone="outline">{b.niche ?? "기타"}</Badge>
-                      <Badge tone="leaf">활성</Badge>
-                    </div>
-                    <h3 className="font-bold text-base">{b.displayName}</h3>
-                    {keywords.length > 0 && (
-                      <div className="mt-1 text-xs text-ink-500 line-clamp-1">
-                        #{keywords.slice(0, 5).join("  #")}
-                      </div>
-                    )}
+            <Card key={b.id} className="transition hover:-translate-y-px hover:shadow-md">
+              <CardContent className="flex items-center gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge tone="outline">{b.niche ?? "기타"}</Badge>
+                    <Badge tone="leaf">활성</Badge>
                   </div>
-                  <Button type="submit" variant="accent">
-                    <Sparkles className="size-4" />
-                    초안 생성
-                  </Button>
-                </CardContent>
-              </Card>
-            </form>
+                  <h3 className="font-bold text-base">{b.displayName}</h3>
+                  {keywords.length > 0 && (
+                    <div className="mt-1 text-xs text-ink-500 line-clamp-1">
+                      #{keywords.slice(0, 5).join("  #")}
+                    </div>
+                  )}
+                </div>
+                <GenerateDraftButton blogId={b.id} />
+              </CardContent>
+            </Card>
           );
         })}
         {blogs.length === 0 && (

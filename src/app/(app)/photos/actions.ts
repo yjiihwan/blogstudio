@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
-import { requireUser } from "@/lib/auth";
+import { getAccessibleDraft, requireUser } from "@/lib/auth";
 import { nanoid } from "nanoid";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -26,7 +26,7 @@ export async function uploadPhotoAction(
   _prevState: { success?: boolean; error?: string } | null,
   formData: FormData
 ): Promise<{ success?: boolean; error?: string }> {
-  await requireUser();
+  const user = await requireUser();
 
   const requestId = String(formData.get("requestId") ?? "");
   if (!requestId) return { error: "요청 ID가 없습니다." };
@@ -42,6 +42,9 @@ export async function uploadPhotoAction(
     with: { draft: true },
   });
   if (!req) return { error: "요청을 찾을 수 없습니다." };
+  // 소유권 검증: 본인 소유 블로그의 초안에 속한 요청만
+  if (!(await getAccessibleDraft(req.draftId, user)))
+    return { error: "권한이 없습니다." };
 
   await ensureStorageDir();
 
@@ -82,16 +85,22 @@ export async function skipPhotoAction(
   _prevState: null,
   formData: FormData
 ): Promise<null> {
-  await requireUser();
+  const user = await requireUser();
 
   const requestId = String(formData.get("requestId") ?? "");
   if (requestId) {
-    await db
-      .update(schema.imageRequests)
-      .set({ status: "skipped" })
-      .where(eq(schema.imageRequests.id, requestId));
+    const req = await db.query.imageRequests.findFirst({
+      where: eq(schema.imageRequests.id, requestId),
+    });
+    // 소유권 검증: 본인 소유 초안의 요청만 스킵 가능
+    if (req && (await getAccessibleDraft(req.draftId, user))) {
+      await db
+        .update(schema.imageRequests)
+        .set({ status: "skipped" })
+        .where(eq(schema.imageRequests.id, requestId));
 
-    revalidatePath("/photos");
+      revalidatePath("/photos");
+    }
   }
   return null;
 }

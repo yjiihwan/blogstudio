@@ -4,12 +4,19 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
-import { requireUser } from "@/lib/auth";
-import { reviseDraftWithFeedback } from "@/lib/pipeline";
+import {
+  getAccessibleBlog,
+  getAccessibleDraft,
+  requireUser,
+} from "@/lib/auth";
+import { reviseDraftWithFeedback, UserApiKeyMissingError } from "@/lib/pipeline";
+import { CreditExhaustedError } from "@/lib/llm";
+import { sendTelegramToUser } from "@/lib/telegram";
 
 export async function saveDraftAction(formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const id = String(formData.get("draftId"));
+  if (!(await getAccessibleDraft(id, user))) throw new Error("FORBIDDEN");
   const bodyMd = String(formData.get("bodyMd") ?? "");
   await db
     .update(schema.drafts)
@@ -27,9 +34,7 @@ export async function saveDraftAction(formData: FormData) {
 export async function approveDraftAction(formData: FormData) {
   const user = await requireUser();
   const id = String(formData.get("draftId"));
-  const draft = await db.query.drafts.findFirst({
-    where: eq(schema.drafts.id, id),
-  });
+  const draft = await getAccessibleDraft(id, user);
   if (!draft) return;
 
   /* Save any inline edits along with approval */
@@ -58,17 +63,31 @@ export async function approveDraftAction(formData: FormData) {
   revalidatePath("/dashboard");
 }
 
-export async function rejectAndReviseAction(formData: FormData) {
+export async function rejectAndReviseAction(
+  formData: FormData
+): Promise<{ error: string } | void> {
   const user = await requireUser();
   const id = String(formData.get("draftId"));
+  if (!(await getAccessibleDraft(id, user))) throw new Error("FORBIDDEN");
   const feedback = String(formData.get("feedback") ?? "").trim();
   const tags = formData.getAll("feedbackTags").map(String);
-  await reviseDraftWithFeedback({
-    draftId: id,
-    feedback,
-    feedbackTags: tags,
-    reviewerUserId: user.id,
-  });
+  try {
+    await reviseDraftWithFeedback({
+      draftId: id,
+      feedback,
+      feedbackTags: tags,
+      reviewerUserId: user.id,
+      callerUserId: user.id,
+    });
+  } catch (err) {
+    if (
+      err instanceof CreditExhaustedError ||
+      err instanceof UserApiKeyMissingError
+    ) {
+      return { error: err.message };
+    }
+    throw err;
+  }
   revalidatePath(`/queue/${id}`);
   revalidatePath(`/queue`);
   revalidatePath("/dashboard");
@@ -77,9 +96,7 @@ export async function rejectAndReviseAction(formData: FormData) {
 export async function markPublishedAction(formData: FormData) {
   const user = await requireUser();
   const id = String(formData.get("draftId"));
-  const draft = await db.query.drafts.findFirst({
-    where: eq(schema.drafts.id, id),
-  });
+  const draft = await getAccessibleDraft(id, user);
   if (!draft) return;
 
   await db
@@ -98,18 +115,63 @@ export async function markPublishedAction(formData: FormData) {
     publishedAt: new Date().toISOString(),
   });
 
+  sendTelegramToUser(
+    user.id,
+    `🎉 게시물이 발행되었습니다!\n제목: ${draft.title}`
+  ).catch(() => null);
+
   revalidatePath(`/queue/${id}`);
   revalidatePath(`/queue`);
   revalidatePath("/dashboard");
 }
 
 export async function generateNewDraftAction(formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const blogId = String(formData.get("blogId"));
   if (!blogId) return;
+  if (!(await getAccessibleBlog(blogId, user))) throw new Error("FORBIDDEN");
   const { generateDraftForBlog } = await import("@/lib/pipeline");
-  const draft = await generateDraftForBlog(blogId);
-  revalidatePath("/queue");
-  revalidatePath("/dashboard");
-  redirect(`/queue/${draft.id}`);
+  try {
+    const draft = await generateDraftForBlog(blogId, user.id);
+    revalidatePath("/queue");
+    revalidatePath("/dashboard");
+    redirect(`/queue/${draft.id}`);
+  } catch (err) {
+    if (err instanceof UserApiKeyMissingError) {
+      throw new Error(err.message);
+    }
+    throw err;
+  }
+}
+
+export type GenerateDraftState = { error: string } | null;
+
+export async function generateNewDraftActionState(
+  _prevState: GenerateDraftState,
+  formData: FormData
+): Promise<GenerateDraftState> {
+  const user = await requireUser();
+  const blogId = String(formData.get("blogId"));
+  if (!blogId) return null;
+  if (!(await getAccessibleBlog(blogId, user)))
+    return { error: "권한이 없습니다." };
+
+  let draftId: string;
+  try {
+    const { generateDraftForBlog } = await import("@/lib/pipeline");
+    const draft = await generateDraftForBlog(blogId, user.id);
+    revalidatePath("/queue");
+    revalidatePath("/dashboard");
+    draftId = draft.id;
+  } catch (err) {
+    if (
+      err instanceof CreditExhaustedError ||
+      err instanceof UserApiKeyMissingError
+    ) {
+      return { error: err.message };
+    }
+    throw err;
+  }
+
+  redirect(`/queue/${draftId}`);
 }
