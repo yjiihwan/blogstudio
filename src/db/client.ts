@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import path from "node:path";
 import fs from "node:fs";
 import * as schema from "./schema";
+import { reconcileSchema } from "./reconcile";
 
 const DB_PATH =
   process.env.DATABASE_URL?.replace(/^file:/, "") ??
@@ -23,6 +24,13 @@ function getSqlite(): Database.Database {
   s.pragma("journal_mode = WAL");
   s.pragma("foreign_keys = ON");
   _sqlite = s;
+  // WHY: instrumentation 훅이 안 돌거나 마이그레이션이 부분 실패해도, 첫 쿼리 전에
+  // 누락 컬럼을 멱등 보강해 로그인 500("no such column")을 원천 차단한다.
+  try {
+    reconcileSchema(s);
+  } catch (err) {
+    console.error("[client] reconcileSchema on open failed:", String(err));
+  }
   return s;
 }
 
