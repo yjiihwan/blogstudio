@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import * as schema from "./schema";
 import { reconcileSchema } from "./reconcile";
+import { ensureAdminSeed } from "./bootstrap";
 
 const DB_PATH =
   process.env.DATABASE_URL?.replace(/^file:/, "") ??
@@ -31,6 +32,8 @@ function getSqlite(): Database.Database {
   } catch (err) {
     console.error("[client] reconcileSchema on open failed:", String(err));
   }
+  // WHY: 스키마 보강 직후, admin 계정 부재로 로그인이 인증 거부되지 않도록 멱등 보강.
+  ensureAdminSeed(s);
   return s;
 }
 

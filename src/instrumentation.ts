@@ -23,4 +23,14 @@ export async function register() {
   } catch (err) {
     console.error("[instrumentation] schema reconcile FAILED:", String(err));
   }
+
+  // 3) admin 계정 부트스트랩(멱등·비파괴). 없으면 생성, 잠겨있으면 해제.
+  try {
+    const { rawSqlite } = await import("@/db/client");
+    const { ensureAdminSeed } = await import("@/db/bootstrap");
+    ensureAdminSeed(rawSqlite);
+    console.log("[instrumentation] admin bootstrap ok");
+  } catch (err) {
+    console.error("[instrumentation] admin bootstrap FAILED:", String(err));
+  }
 }
