@@ -1,13 +1,18 @@
 import Link from "next/link";
-import { CalendarClock, BarChart3, Settings } from "lucide-react";
+import { CalendarClock, BarChart3, Settings, UserCircle, Users } from "lucide-react";
+import { getCurrentUser } from "@/lib/auth";
 
-const items = [
-  { href: "/schedule", label: "스케줄", icon: <CalendarClock className="size-5" />, desc: "발행 예약 및 일정 관리" },
-  { href: "/insights", label: "노출 분석", icon: <BarChart3 className="size-5" />, desc: "블로그별 유입·노출 현황" },
-  { href: "/settings", label: "설정", icon: <Settings className="size-5" />, desc: "계정 및 앱 설정" },
-];
-
-export default function MorePage() {
+export default async function MorePage() {
+  const user = await getCurrentUser();
+  const items = [
+    { href: "/schedule", label: "스케줄", icon: <CalendarClock className="size-5" />, desc: "발행 예약 및 일정 관리" },
+    { href: "/insights", label: "노출 분석", icon: <BarChart3 className="size-5" />, desc: "블로그별 유입·노출 현황" },
+    { href: "/settings", label: "설정", icon: <Settings className="size-5" />, desc: "계정 및 앱 설정" },
+    { href: "/account", label: "내 계정", icon: <UserCircle className="size-5" />, desc: "프로필·알림·API 키 설정" },
+    ...(user?.role === "admin"
+      ? [{ href: "/admin/users", label: "사용자 관리", icon: <Users className="size-5" />, desc: "회원 승인 및 관리" }]
+      : []),
+  ];
   return (
     <div className="px-4 pt-6 pb-8">
       <h1 className="text-lg font-bold text-ink-900 mb-4">더보기</h1>
