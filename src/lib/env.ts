@@ -21,6 +21,9 @@ export const env = {
     process.env.ANTHROPIC_MODEL_DRAFT ?? "claude-sonnet-4-6",
   ANTHROPIC_MODEL_REVIEW:
     process.env.ANTHROPIC_MODEL_REVIEW ?? "claude-haiku-4-5-20251001",
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
+  OPENAI_MODEL_DRAFT: process.env.OPENAI_MODEL_DRAFT ?? "gpt-4o",
+  OPENAI_MODEL_REVIEW: process.env.OPENAI_MODEL_REVIEW ?? "gpt-4o-mini",
   UNSPLASH_ACCESS_KEY: process.env.UNSPLASH_ACCESS_KEY ?? "",
   PEXELS_API_KEY: process.env.PEXELS_API_KEY ?? "",
   NAVER_OPENAPI_CLIENT_ID: process.env.NAVER_OPENAPI_CLIENT_ID ?? "",
@@ -28,3 +31,4 @@ export const env = {
 };
 
 export const hasAnthropic = () => env.ANTHROPIC_API_KEY.length > 0;
+export const hasOpenAI = () => env.OPENAI_API_KEY.length > 0;

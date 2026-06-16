@@ -20,6 +20,8 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
     { name: "status", ddl: "`status` text NOT NULL DEFAULT 'approved'" },
     { name: "is_active", ddl: "`is_active` integer NOT NULL DEFAULT 1" },
     { name: "api_key_mode", ddl: "`api_key_mode` text NOT NULL DEFAULT 'user_key'" },
+    { name: "llm_provider", ddl: "`llm_provider` text NOT NULL DEFAULT 'anthropic'" },
+    { name: "anthropic_api_key", ddl: "`anthropic_api_key` text" },
     { name: "openai_api_key", ddl: "`openai_api_key` text" },
     { name: "image_api_key_mode", ddl: "`image_api_key_mode` text NOT NULL DEFAULT 'system'" },
     { name: "unsplash_key", ddl: "`unsplash_key` text" },
@@ -48,6 +50,30 @@ export function reconcileSchema(sqlite: MinimalSqlite): void {
     } catch {
       continue;
     }
+
+    // openai_api_key → anthropic_api_key 데이터 마이그레이션 (1회성, 멱등)
+    // openai_api_key 컬럼이 존재하고 anthropic_api_key가 신규 추가될 때만 실행.
+    // WHY: 기존 컬럼명이 Anthropic 키를 담고 있어 네이밍 정정 + 실제 OpenAI 키 분리.
+    if (
+      table === "users" &&
+      existing.has("openai_api_key") &&
+      !existing.has("anthropic_api_key")
+    ) {
+      try {
+        sqlite.exec("ALTER TABLE `users` ADD COLUMN `anthropic_api_key` text");
+        sqlite.exec(
+          "UPDATE `users` SET `anthropic_api_key` = `openai_api_key` WHERE `openai_api_key` IS NOT NULL"
+        );
+        sqlite.exec(
+          "UPDATE `users` SET `openai_api_key` = NULL WHERE `openai_api_key` IS NOT NULL AND `anthropic_api_key` IS NOT NULL"
+        );
+        console.log("[reconcile] migrated openai_api_key → anthropic_api_key");
+        existing.add("anthropic_api_key");
+      } catch (err) {
+        console.error("[reconcile] FAILED migration openai→anthropic:", String(err));
+      }
+    }
+
     for (const col of columns) {
       if (existing.has(col.name)) continue;
       try {

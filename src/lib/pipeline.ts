@@ -16,7 +16,6 @@ import {
   topicResearchPrompt,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
-import { env } from "./env";
 import { sendTelegramToUser } from "./telegram";
 
 function safeJson<T = unknown>(text: string): T | null {
@@ -88,7 +87,6 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
   const recentTitles = recent.map((r) => r.title);
 
   const topicRes = await llm({
-    model: env.ANTHROPIC_MODEL_DRAFT,
     system: preamble,
     messages: [
       {
@@ -154,7 +152,6 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
 
   /* --- Step 2: outline --- */
   const outlineRes = await llm({
-    model: env.ANTHROPIC_MODEL_DRAFT,
     system: preamble,
     callerUserId,
     messages: [
@@ -191,7 +188,6 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
 
   /* --- Step 3: body --- */
   const bodyRes = await llm({
-    model: env.ANTHROPIC_MODEL_DRAFT,
     system: preamble,
     callerUserId,
     messages: [
@@ -323,7 +319,6 @@ export async function reviseDraftWithFeedback(opts: {
   const preamble = personaPreamble(persona);
 
   const res = await llm({
-    model: env.ANTHROPIC_MODEL_DRAFT,
     system: preamble,
     callerUserId: opts.callerUserId,
     messages: [

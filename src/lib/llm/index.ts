@@ -1,48 +1,14 @@
 /**
- * LLM facade — single interface used by the rest of the app. Real Anthropic
- * SDK call when ANTHROPIC_API_KEY is set (env or DB); otherwise returns a
- * high-quality deterministic mock so the whole pipeline is testable end-to-end
- * without a key.
+ * LLM facade — provider-agnostic interface used by the rest of the app.
+ * Routes to Anthropic or OpenAI based on the calling user's llmProvider setting.
+ * Falls back to mock when no key is available (keeps pipeline testable without keys).
  */
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { env } from "@/lib/env";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
 import { decryptApiKey } from "@/lib/crypto";
-
-async function resolveKey(userId?: string): Promise<string | null> {
-  // Per-user key mode: user_key → decrypt user's stored API key
-  if (userId) {
-    try {
-      const user = await db.query.users.findFirst({
-        where: eq(schema.users.id, userId),
-      });
-      if (user?.apiKeyMode === "user_key") {
-        if (!user.openaiApiKey) {
-          throw new UserApiKeyMissingError();
-        }
-        return decryptApiKey(user.openaiApiKey);
-      }
-    } catch (err) {
-      if (err instanceof UserApiKeyMissingError) throw err;
-      // DB/decrypt error → fall through to system key
-    }
-  }
-
-  // System mode: check settings table, then env
-  try {
-    const row = await db.query.settings.findFirst({
-      where: eq(schema.settings.key, "anthropic_api_key"),
-    });
-    if (row) {
-      const k = JSON.parse(row.valueJson) as string;
-      if (k) return k;
-    }
-  } catch {
-    // DB read failure → fall through to env
-  }
-  return env.ANTHROPIC_API_KEY || null;
-}
 
 export class CreditExhaustedError extends Error {
   constructor() {
@@ -52,8 +18,11 @@ export class CreditExhaustedError extends Error {
 }
 
 export class UserApiKeyMissingError extends Error {
-  constructor() {
-    super("API 키를 먼저 입력해주세요. 설정 → 내 API 키에서 Anthropic 키를 등록하면 글 생성이 가능합니다.");
+  constructor(provider: "anthropic" | "openai" = "anthropic") {
+    const label = provider === "openai" ? "OpenAI" : "Anthropic";
+    super(
+      `API 키를 먼저 입력해주세요. 설정 → 내 API 키에서 ${label} 키를 등록하면 글 생성이 가능합니다.`
+    );
     this.name = "UserApiKeyMissingError";
   }
 }
@@ -69,7 +38,7 @@ export type LLMOptions = {
   forceMock?: boolean;
   /** Override (for tests) returning a deterministic completion. */
   mockResponder?: (msgs: LLMMessage[]) => string;
-  /** If provided, resolves the API key from this user's api_key_mode setting. */
+  /** If provided, resolves the API key and provider from this user's settings. */
   callerUserId?: string;
 };
 
@@ -82,26 +51,76 @@ export type LLMResult = {
   isMock: boolean;
 };
 
-/* Rough Sonnet 4.6 prices in USD per 1M tokens (May 2026) */
+/* Prices in USD per 1M tokens */
 const PRICES_USD_PER_M: Record<string, { in: number; out: number }> = {
   "claude-opus-4-7": { in: 15, out: 75 },
   "claude-sonnet-4-6": { in: 3, out: 15 },
   "claude-haiku-4-5-20251001": { in: 0.8, out: 4 },
+  "gpt-4o": { in: 5, out: 15 },
+  "gpt-4o-mini": { in: 0.15, out: 0.6 },
 };
 const USD_KRW = 1380;
 
 function costFor(model: string, inT: number, outT: number) {
   const p = PRICES_USD_PER_M[model] ?? PRICES_USD_PER_M["claude-sonnet-4-6"];
   const usd = (inT * p.in + outT * p.out) / 1_000_000;
-  return Math.round(usd * USD_KRW * 100); // cents of KRW (i.e. 0.01원 단위)
+  return Math.round(usd * USD_KRW * 100);
+}
+
+type ProviderKey = { provider: "anthropic" | "openai"; apiKey: string | null };
+
+async function getSystemKey(provider: "anthropic" | "openai"): Promise<string | null> {
+  const settingsKey = provider === "anthropic" ? "anthropic_api_key" : "openai_api_key";
+  try {
+    const row = await db.query.settings.findFirst({
+      where: eq(schema.settings.key, settingsKey),
+    });
+    if (row) {
+      const k = JSON.parse(row.valueJson) as string;
+      if (k) return k;
+    }
+  } catch {
+    // DB read failure → fall through to env
+  }
+  return provider === "anthropic"
+    ? env.ANTHROPIC_API_KEY || null
+    : env.OPENAI_API_KEY || null;
+}
+
+async function resolveProviderAndKey(userId?: string): Promise<ProviderKey> {
+  if (userId) {
+    try {
+      const user = await db.query.users.findFirst({
+        where: eq(schema.users.id, userId),
+      });
+      if (user) {
+        const provider = (user.llmProvider ?? "anthropic") as "anthropic" | "openai";
+        if (user.apiKeyMode === "user_key") {
+          const encKey =
+            provider === "anthropic" ? user.anthropicApiKey : user.openaiApiKey;
+          if (!encKey) throw new UserApiKeyMissingError(provider);
+          return { provider, apiKey: decryptApiKey(encKey) };
+        }
+        // system key mode: use system key for the user's chosen provider
+        const apiKey = await getSystemKey(provider);
+        return { provider, apiKey };
+      }
+    } catch (err) {
+      if (err instanceof UserApiKeyMissingError) throw err;
+      // DB/decrypt error → fall through to system Anthropic key
+    }
+  }
+  // No user or lookup failed: Anthropic system key
+  const apiKey = await getSystemKey("anthropic");
+  return { provider: "anthropic", apiKey };
 }
 
 export async function llm(opts: LLMOptions): Promise<LLMResult> {
-  const model = opts.model ?? env.ANTHROPIC_MODEL_DRAFT;
-  const apiKey = opts.forceMock ? null : await resolveKey(opts.callerUserId);
-  const client = apiKey ? new Anthropic({ apiKey }) : null;
+  const { provider, apiKey } = opts.forceMock
+    ? { provider: "anthropic" as const, apiKey: null }
+    : await resolveProviderAndKey(opts.callerUserId);
 
-  if (!client || opts.forceMock) {
+  if (!apiKey || opts.forceMock) {
     const text = opts.mockResponder
       ? opts.mockResponder(opts.messages)
       : defaultMock(opts);
@@ -109,15 +128,18 @@ export async function llm(opts: LLMOptions): Promise<LLMResult> {
       [opts.system ?? "", ...opts.messages.map((m) => m.content)].join("\n")
     );
     const outT = roughTokenCount(text);
-    return {
-      text,
-      model: "mock",
-      inputTokens: inT,
-      outputTokens: outT,
-      costCents: 0,
-      isMock: true,
-    };
+    return { text, model: "mock", inputTokens: inT, outputTokens: outT, costCents: 0, isMock: true };
   }
+
+  if (provider === "openai") {
+    return callOpenAI(opts, apiKey);
+  }
+  return callAnthropic(opts, apiKey);
+}
+
+async function callAnthropic(opts: LLMOptions, apiKey: string): Promise<LLMResult> {
+  const model = opts.model ?? env.ANTHROPIC_MODEL_DRAFT;
+  const client = new Anthropic({ apiKey });
 
   let res: Awaited<ReturnType<typeof client.messages.create>>;
   try {
@@ -141,26 +163,42 @@ export async function llm(opts: LLMOptions): Promise<LLMResult> {
     throw err;
   }
 
-  const text =
-    res.content
-      .map((c) => (c.type === "text" ? c.text : ""))
-      .join("\n")
-      .trim() ?? "";
+  const text = res.content.map((c) => (c.type === "text" ? c.text : "")).join("\n").trim();
   const inT = res.usage?.input_tokens ?? 0;
   const outT = res.usage?.output_tokens ?? 0;
+  return { text, model, inputTokens: inT, outputTokens: outT, costCents: costFor(model, inT, outT), isMock: false };
+}
 
-  return {
-    text,
-    model,
-    inputTokens: inT,
-    outputTokens: outT,
-    costCents: costFor(model, inT, outT),
-    isMock: false,
-  };
+async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> {
+  const model = opts.model ?? env.OPENAI_MODEL_DRAFT;
+  const client = new OpenAI({ apiKey });
+
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    ...(opts.system ? [{ role: "system" as const, content: opts.system }] : []),
+    ...opts.messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+  ];
+
+  let res: OpenAI.Chat.Completions.ChatCompletion;
+  try {
+    res = await client.chat.completions.create({
+      model,
+      max_tokens: opts.maxTokens ?? 4096,
+      messages,
+    });
+  } catch (err) {
+    if (err instanceof OpenAI.APIError) {
+      if (err.status === 429 || err.status === 402) throw new CreditExhaustedError();
+    }
+    throw err;
+  }
+
+  const text = res.choices[0]?.message?.content?.trim() ?? "";
+  const inT = res.usage?.prompt_tokens ?? 0;
+  const outT = res.usage?.completion_tokens ?? 0;
+  return { text, model, inputTokens: inT, outputTokens: outT, costCents: costFor(model, inT, outT), isMock: false };
 }
 
 export function roughTokenCount(s: string) {
-  /* Korean text averages ~1 token per Korean char; English ~1/4. */
   let count = 0;
   for (const ch of s) {
     const code = ch.charCodeAt(0);
@@ -169,22 +207,11 @@ export function roughTokenCount(s: string) {
   return Math.round(count);
 }
 
-/* Naive default mock: echoes back a templated outline based on the last user
-   message. Used when no API key is present, so the UI flow stays alive. */
 function defaultMock(opts: LLMOptions): string {
   const last = opts.messages.at(-1)?.content ?? "";
   if (last.includes("주제 후보")) {
     return JSON.stringify(
-      [
-        {
-          title: "[MOCK] 초여름 점심으로 좋은 한그릇 메뉴 3가지",
-          angle: "데모 — Anthropic 키 미연결 상태에서 생성됨",
-          primaryKeyword: "초여름 점심",
-          secondaryKeywords: ["직화구이 한그릇", "강남 점심"],
-          rationale: "시즌성 + 검색량 안정",
-          score: 75,
-        },
-      ],
+      [{ title: "[MOCK] 초여름 점심으로 좋은 한그릇 메뉴 3가지", angle: "데모 — LLM 키 미연결 상태에서 생성됨", primaryKeyword: "초여름 점심", secondaryKeywords: ["직화구이 한그릇", "강남 점심"], rationale: "시즌성 + 검색량 안정", score: 75 }],
       null,
       2
     );
@@ -192,8 +219,8 @@ function defaultMock(opts: LLMOptions): string {
   return [
     "## [MOCK] AI 키 미연결 — 데모 출력",
     "",
-    "Anthropic API 키가 등록되지 않아 실제 글이 생성되지 않았습니다.",
-    "설정 → API 키에서 sk-ant-… 키를 등록하면 이 부분이 실제 본문으로 바뀝니다.",
+    "API 키가 등록되지 않아 실제 글이 생성되지 않았습니다.",
+    "설정 → 내 API 키에서 키를 등록하면 이 부분이 실제 본문으로 바뀝니다.",
     "",
     "지금은 흐름 확인용 자리표시 텍스트입니다.",
   ].join("\n");

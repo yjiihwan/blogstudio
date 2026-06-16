@@ -2,27 +2,57 @@ export const dynamic = "force-dynamic";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getStoredApiKeyMasked, getStoredUnsplashKeyMasked, getStoredPexelsKeyMasked, getStoredGoogleAiKeyMasked, getStoredTelegramTokenMasked, getUserApiKeyInfo, getImageApiKeyInfo } from "./actions";
+import {
+  getStoredApiKeyMasked,
+  getStoredSystemOpenAIKeyMasked,
+  getStoredUnsplashKeyMasked,
+  getStoredPexelsKeyMasked,
+  getStoredGoogleAiKeyMasked,
+  getStoredTelegramTokenMasked,
+  getUserApiKeyInfo,
+  getImageApiKeyInfo,
+  getLLMProviderInfo,
+} from "./actions";
 import { ApiKeyForm } from "./api-key-form";
 import { ImageSourceForm, UserImageSourceForm } from "./image-source-form";
 import { TelegramForm } from "./telegram-form";
-import { OpenAiKeyForm } from "./openai-key-form";
+import { LLMProviderForm } from "./llm-provider-form";
+import { SystemOpenAIKeyForm } from "./system-openai-key-form";
 import { env } from "@/lib/env";
+import { SystemChip, PersonalChip } from "@/components/ui/key-type-chip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 
 export default async function SettingsPage() {
-  const [dbMasked, unsplashMasked, pexelsMasked, googleAiMasked, userApiKeyInfo, imageKeyInfo] = await Promise.all([
+  const [
+    dbMasked,
+    systemOpenAIMasked,
+    unsplashMasked,
+    pexelsMasked,
+    googleAiMasked,
+    userApiKeyInfo,
+    imageKeyInfo,
+    llmProviderInfo,
+  ] = await Promise.all([
     getStoredApiKeyMasked(),
+    getStoredSystemOpenAIKeyMasked(),
     getStoredUnsplashKeyMasked(),
     getStoredPexelsKeyMasked(),
     getStoredGoogleAiKeyMasked(),
     getUserApiKeyInfo(),
     getImageApiKeyInfo(),
+    getLLMProviderInfo(),
   ]);
   const envConnected = env.ANTHROPIC_API_KEY.length > 0;
   const isConnected = !!dbMasked || envConnected;
   const isAdmin = userApiKeyInfo.role === "admin";
-  // Bot Token은 시스템 자원 — 어드민만 조회/관리. Chat ID는 "내 계정" 페이지에서 계정별 등록.
   const telegramTokenMasked = isAdmin ? await getStoredTelegramTokenMasked() : null;
+  const isUserKeyMode = userApiKeyInfo.mode === "user_key";
 
   return (
     <div className="px-5 lg:px-10 py-8 lg:py-12 max-w-3xl mx-auto">
@@ -34,11 +64,15 @@ export default async function SettingsPage() {
       </header>
 
       <div className="space-y-3">
+        {/* ── Anthropic 시스템 키 (어드민) ─────────────────────── */}
         {isAdmin && (
           <Card>
             <CardContent>
               <div className="flex items-center justify-between mb-1">
-                <h2 className="font-bold text-base">Anthropic API 키 (시스템)</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-bold text-base">Anthropic API 키</h2>
+                  <SystemChip />
+                </div>
                 {isConnected ? (
                   <Badge tone="leaf">연결됨</Badge>
                 ) : (
@@ -59,6 +93,30 @@ export default async function SettingsPage() {
           </Card>
         )}
 
+        {/* ── OpenAI 시스템 키 (어드민) ────────────────────────── */}
+        {isAdmin && (
+          <Card>
+            <CardContent>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <h2 className="font-bold text-base">OpenAI API 키</h2>
+                  <SystemChip />
+                </div>
+                {systemOpenAIMasked ? (
+                  <Badge tone="leaf">연결됨</Badge>
+                ) : (
+                  <Badge tone="neutral">미연결</Badge>
+                )}
+              </div>
+              <p className="text-sm text-ink-600 leading-relaxed mb-4">
+                시스템 키 모드 계정이 ChatGPT(OpenAI)를 선택했을 때 공유하는 키입니다.
+              </p>
+              <SystemOpenAIKeyForm initialMasked={systemOpenAIMasked} />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── AI 사용 설정 안내 (비어드민 + 시스템 모드) ───────── */}
         {!isAdmin && userApiKeyInfo.mode === "system" && (
           <Card>
             <CardContent>
@@ -70,14 +128,72 @@ export default async function SettingsPage() {
                 이 계정은 <strong>시스템 키 모드</strong>로 설정되어 있습니다.
                 별도 API 키 등록 없이 AI 기능(글 생성, 재작성)을 바로 사용할 수 있습니다.
               </p>
+              <p className="text-xs text-ink-500 mt-2">
+                현재 LLM:{" "}
+                <strong>
+                  {llmProviderInfo.provider === "openai" ? "ChatGPT (OpenAI)" : "Claude (Anthropic)"}
+                </strong>
+              </p>
             </CardContent>
           </Card>
         )}
 
+        {/* ── LLM 선택 + 개인 키 (유저 키 모드) ───────────────── */}
+        {isUserKeyMode && (
+          <Card>
+            <CardContent>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <h2 className="font-bold text-base">AI 글쓰기 설정</h2>
+                  <PersonalChip />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Badge tone="amber">개인 키 모드</Badge>
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="text-ink-400 hover:text-ink-700 transition-colors rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-600"
+                          aria-label="개인 키 모드 설명"
+                        >
+                          <Info className="size-3.5" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" align="end" className="max-w-[240px] text-xs leading-relaxed">
+                        <p className="font-semibold mb-0.5">API 비용은 본인 계정으로 직접 청구됩니다.</p>
+                        <p className="text-ink-400">
+                          등록한 API 키로 글이 생성되며, 사용량은 Anthropic·OpenAI 대시보드에서 확인할 수 있습니다.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </div>
+              <p className="text-xs text-ink-500 leading-relaxed mb-3 sm:hidden">
+                API 비용은 본인 계정으로 직접 청구됩니다.
+              </p>
+              <p className="text-sm text-ink-600 leading-relaxed mb-4 hidden sm:block">
+                사용할 LLM을 선택하고 해당 API 키를 등록하세요.
+                API 비용은 본인 계정으로 청구됩니다.
+              </p>
+              <LLMProviderForm
+                initialProvider={llmProviderInfo.provider}
+                initialAnthropicMasked={llmProviderInfo.anthropicMasked}
+                initialOpenAIMasked={llmProviderInfo.openaiMasked}
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── 이미지 소스 (어드민 시스템 키) ──────────────────── */}
         {isAdmin && (
           <Card>
             <CardContent>
-              <h2 className="font-bold text-base mb-1">이미지 소스 (시스템 키)</h2>
+              <div className="flex items-center gap-2 mb-1">
+                <h2 className="font-bold text-base">이미지 소스</h2>
+                <SystemChip />
+              </div>
               <p className="text-sm text-ink-600 leading-relaxed mb-4">
                 전체 시스템에서 공유하는 이미지 API 키입니다. 시스템 키 모드 계정이 함께 사용합니다.
               </p>
@@ -90,6 +206,7 @@ export default async function SettingsPage() {
           </Card>
         )}
 
+        {/* ── 이미지 소스 (비어드민 시스템 모드) ──────────────── */}
         {!isAdmin && imageKeyInfo.mode === "system" && (
           <Card>
             <CardContent>
@@ -105,6 +222,7 @@ export default async function SettingsPage() {
           </Card>
         )}
 
+        {/* ── 이미지 소스 (비어드민 유저 키 모드) ─────────────── */}
         {!isAdmin && imageKeyInfo.mode === "user_key" && (
           <Card>
             <CardContent>
@@ -125,27 +243,7 @@ export default async function SettingsPage() {
           </Card>
         )}
 
-        {userApiKeyInfo.mode === "user_key" && (
-          <Card>
-            <CardContent>
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="font-bold text-base">내 API 키</h2>
-                {userApiKeyInfo.masked ? (
-                  <Badge tone="leaf">등록됨</Badge>
-                ) : (
-                  <Badge tone="amber">미등록 — AI 기능 사용 불가</Badge>
-                )}
-              </div>
-              <p className="text-sm text-ink-600 leading-relaxed mb-4">
-                이 계정은 <strong>유저 키 모드</strong>로 설정되어 있습니다.
-                Anthropic API 키를 직접 등록해야 AI 기능(글 생성, 재작성)을 사용할 수 있습니다.
-                API 비용은 본인 계정으로 청구됩니다.
-              </p>
-              <OpenAiKeyForm initialMasked={userApiKeyInfo.masked} />
-            </CardContent>
-          </Card>
-        )}
-
+        {/* ── 텔레그램 Bot Token (어드민) ──────────────────────── */}
         {isAdmin && (
           <Card>
             <CardContent>

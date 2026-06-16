@@ -6,11 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { saveUserApiKeyAction, testUserApiKeyAction } from "./actions";
+import { saveSystemOpenAIKeyAction, testSystemOpenAIKeyAction } from "./actions";
 
 type TestResult = { ok: boolean; message: string } | null;
 
-export function OpenAiKeyForm({ initialMasked }: { initialMasked: string | null }) {
+export function SystemOpenAIKeyForm({ initialMasked }: { initialMasked: string | null }) {
   const [showKey, setShowKey] = useState(false);
   const [masked, setMasked] = useState(initialMasked);
   const [testResult, setTestResult] = useState<TestResult>(null);
@@ -19,7 +19,7 @@ export function OpenAiKeyForm({ initialMasked }: { initialMasked: string | null 
 
   function handleSave(formData: FormData) {
     startSave(async () => {
-      const result = await saveUserApiKeyAction(formData);
+      const result = await saveSystemOpenAIKeyAction(formData);
       if (result.ok) {
         setMasked(result.masked);
         setTestResult(null);
@@ -29,7 +29,7 @@ export function OpenAiKeyForm({ initialMasked }: { initialMasked: string | null 
 
   function handleTest() {
     startTest(async () => {
-      const result = await testUserApiKeyAction();
+      const result = await testSystemOpenAIKeyAction();
       setTestResult(result);
     });
   }
@@ -37,16 +37,14 @@ export function OpenAiKeyForm({ initialMasked }: { initialMasked: string | null 
   return (
     <form action={handleSave} className="space-y-4">
       <div className="space-y-1.5">
-        <Label htmlFor="userAnthropicApiKey">내 Anthropic API 키</Label>
-        {masked && (
-          <p className="text-xs text-ink-500 font-mono mt-1">{masked}</p>
-        )}
+        <Label htmlFor="systemOpenAIKey">OpenAI API 키</Label>
+        {masked && <p className="text-xs text-ink-500 font-mono mt-1">{masked}</p>}
         <div className="relative">
           <Input
-            id="userAnthropicApiKey"
+            id="systemOpenAIKey"
             name="apiKey"
             type={showKey ? "text" : "password"}
-            placeholder="sk-ant-api03-..."
+            placeholder="sk-..."
             className="pr-10"
             autoComplete="off"
           />
@@ -61,12 +59,12 @@ export function OpenAiKeyForm({ initialMasked }: { initialMasked: string | null 
           </button>
         </div>
         <a
-          href="https://console.anthropic.com/settings/keys"
+          href="https://platform.openai.com/api-keys"
           target="_blank"
           rel="noopener noreferrer"
           className="inline-block text-xs text-accent-600 underline underline-offset-4"
         >
-          Anthropic API 키 발급받기 →
+          OpenAI API 키 발급받기 →
         </a>
       </div>
 
@@ -86,9 +84,7 @@ export function OpenAiKeyForm({ initialMasked }: { initialMasked: string | null 
           연결 테스트
         </Button>
         {testResult && (
-          <Badge tone={testResult.ok ? "leaf" : "amber"}>
-            {testResult.message}
-          </Badge>
+          <Badge tone={testResult.ok ? "leaf" : "amber"}>{testResult.message}</Badge>
         )}
       </div>
     </form>

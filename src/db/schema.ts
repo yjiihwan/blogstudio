@@ -30,6 +30,10 @@ export const users = sqliteTable("users", {
   apiKeyMode: text("api_key_mode", { enum: ["system", "user_key"] })
     .notNull()
     .default("user_key"),
+  llmProvider: text("llm_provider", { enum: ["anthropic", "openai"] })
+    .notNull()
+    .default("anthropic"),
+  anthropicApiKey: text("anthropic_api_key"),
   openaiApiKey: text("openai_api_key"),
   imageApiKeyMode: text("image_api_key_mode", { enum: ["system", "user_key"] })
     .notNull()
