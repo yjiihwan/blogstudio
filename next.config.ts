@@ -16,8 +16,8 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
-  // better-sqlite3는 네이티브 모듈이므로 번들링 대상에서 제외
-  serverExternalPackages: ["better-sqlite3"],
+  // 네이티브 모듈 및 번들러 비호환 패키지는 외부로 분리
+  serverExternalPackages: ["better-sqlite3", "openai", "@anthropic-ai/sdk"],
   allowedDevOrigins: ["*.trycloudflare.com", "*.loca.lt", "100.85.154.17"],
   poweredByHeader: false,
   async headers() {
