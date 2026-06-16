@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
-import { Sparkles } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import {
   generateNewDraftActionState,
   GenerateDraftState,
@@ -17,11 +17,18 @@ export function GenerateDraftButton({ blogId }: { blogId: string }) {
     <form action={action} className="flex flex-col items-end gap-1">
       <input type="hidden" name="blogId" value={blogId} />
       <Button type="submit" variant="accent" disabled={pending}>
-        <Sparkles className="size-4" />
+        {pending ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <Sparkles className="size-4" />
+        )}
         {pending ? "생성 중..." : "초안 생성"}
       </Button>
+      {pending && (
+        <p className="text-xs text-ink-500 text-right">약 15~40초 소요</p>
+      )}
       {state?.error && (
-        <p className="text-xs text-destructive max-w-[200px] text-right">
+        <p className="text-xs text-destructive max-w-sm text-right">
           {state.error}
         </p>
       )}

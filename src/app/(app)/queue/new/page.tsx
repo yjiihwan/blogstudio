@@ -5,28 +5,37 @@ import { and, asc, eq } from "drizzle-orm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { env } from "@/lib/env";
+import { decryptApiKey } from "@/lib/crypto";
 import { GenerateDraftButton } from "./GenerateDraftButton";
 import { requireUser, scopeBlogsWhere } from "@/lib/auth";
 
-async function hasAnthropicKey(): Promise<boolean> {
-  if (env.ANTHROPIC_API_KEY) return true;
-  const row = await db.query.settings.findFirst({
-    where: eq(schema.settings.key, "anthropic_api_key"),
-  });
+async function hasSystemKey(provider: "anthropic" | "openai"): Promise<boolean> {
+  const settingsKey = provider === "anthropic" ? "anthropic_api_key" : "openai_api_key";
+  const envKey = provider === "anthropic" ? env.ANTHROPIC_API_KEY : env.OPENAI_API_KEY;
+  if (envKey) return true;
+  const row = await db.query.settings.findFirst({ where: eq(schema.settings.key, settingsKey) });
   if (!row) return false;
   const k = JSON.parse(row.valueJson) as string;
   return !!k;
 }
 
+async function userHasLLMKey(user: typeof schema.users.$inferSelect): Promise<boolean> {
+  const provider = (user.llmProvider ?? "anthropic") as "anthropic" | "openai";
+  if (user.apiKeyMode === "system") return hasSystemKey(provider);
+  const encKey = provider === "anthropic" ? user.anthropicApiKey : user.openaiApiKey;
+  if (!encKey) return false;
+  try { decryptApiKey(encKey); return true; } catch { return false; }
+}
+
 export default async function NewDraftPage() {
   const user = await requireUser();
-  const [blogs, anthropicReady] = await Promise.all([
+  const [blogs, llmReady] = await Promise.all([
     db.query.blogs.findMany({
       where: and(eq(schema.blogs.status, "active"), scopeBlogsWhere(user)),
       orderBy: asc(schema.blogs.displayName),
       with: { personas: true },
     }),
-    hasAnthropicKey(),
+    userHasLLMKey(user),
   ]);
 
   return (
@@ -54,10 +63,10 @@ export default async function NewDraftPage() {
         </p>
       </header>
 
-      {!anthropicReady && (
+      {!llmReady && (
         <div className="mb-5 rounded-lg bg-amber-100 border border-amber-500/20 px-4 py-3 text-sm text-amber-500">
           <div className="font-semibold mb-0.5">데모 모드</div>
-          Anthropic API 키 미연결 — 자리표시 텍스트로 생성됩니다. 실제 글은 설정 → API 키 등록 후 활성화됩니다.
+          API 키 미연결 — 자리표시 텍스트로 생성됩니다. 실제 글은 설정 → AI 글쓰기 설정에서 API 키를 등록하면 활성화됩니다.
         </div>
       )}
 
@@ -91,13 +100,24 @@ export default async function NewDraftPage() {
         {blogs.length === 0 && (
           <Card>
             <CardContent className="py-16 text-center text-sm text-ink-500">
-              활성 상태의 블로그가 없습니다.{" "}
-              <Link
-                href="/blogs/new"
-                className="text-accent-600 font-semibold underline underline-offset-4"
-              >
-                블로그 추가하기
-              </Link>
+              <p className="mb-3">
+                현재 활성 블로그가 없습니다. 블로그 목록에서 상태를 확인하거나 새 블로그를 추가하세요.
+              </p>
+              <div className="flex justify-center gap-3">
+                <Link
+                  href="/blogs"
+                  className="text-accent-600 font-semibold underline underline-offset-4"
+                >
+                  블로그 목록 확인
+                </Link>
+                <span className="text-ink-300">|</span>
+                <Link
+                  href="/blogs/new"
+                  className="text-accent-600 font-semibold underline underline-offset-4"
+                >
+                  블로그 추가하기
+                </Link>
+              </div>
             </CardContent>
           </Card>
         )}
