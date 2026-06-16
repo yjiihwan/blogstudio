@@ -5,7 +5,8 @@
  */
 import { db, schema } from "@/db/client";
 import { and, desc, eq, gte } from "drizzle-orm";
-import { llm } from "./llm";
+import { llm, UserApiKeyMissingError } from "./llm";
+export { UserApiKeyMissingError };
 import {
   bodyPrompt,
   outlinePrompt,
@@ -65,13 +66,6 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
 /* ============================================================
    PUBLIC ENTRY POINTS
    ============================================================ */
-
-export class UserApiKeyMissingError extends Error {
-  constructor() {
-    super("API 키를 먼저 입력해주세요. 설정 → 내 API 키에서 Anthropic 키를 등록하면 글 생성이 가능합니다.");
-    this.name = "UserApiKeyMissingError";
-  }
-}
 
 export async function generateDraftForBlog(blogId: string, callerUserId?: string) {
   const blog = await db.query.blogs.findFirst({

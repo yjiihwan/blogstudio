@@ -85,12 +85,14 @@ export default async function LoginPage({
               </p>
             </form>
 
-            <div className="mt-8 p-3 rounded-lg bg-paper-200 text-xs text-ink-600">
-              <div className="font-semibold text-ink-700 mb-1 text-[11px] uppercase tracking-wider">
-                개발용 계정
+            {process.env.NODE_ENV !== "production" && (
+              <div className="mt-8 p-3 rounded-lg bg-paper-200 text-xs text-ink-600">
+                <div className="font-semibold text-ink-700 mb-1 text-[11px] uppercase tracking-wider">
+                  개발용 계정
+                </div>
+                <div>admin@blogstudio.local / studio1234!</div>
               </div>
-              <div>admin@blogstudio.local / studio1234!</div>
-            </div>
+            )}
           </CardContent>
         </Card>
 

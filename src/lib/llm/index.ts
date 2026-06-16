@@ -19,12 +19,12 @@ async function resolveKey(userId?: string): Promise<string | null> {
       });
       if (user?.apiKeyMode === "user_key") {
         if (!user.openaiApiKey) {
-          throw new Error("USER_API_KEY_MISSING");
+          throw new UserApiKeyMissingError();
         }
         return decryptApiKey(user.openaiApiKey);
       }
     } catch (err) {
-      if (err instanceof Error && err.message === "USER_API_KEY_MISSING") throw err;
+      if (err instanceof UserApiKeyMissingError) throw err;
       // DB/decrypt error → fall through to system key
     }
   }
@@ -48,6 +48,13 @@ export class CreditExhaustedError extends Error {
   constructor() {
     super("API 크레딧이 소진되었습니다. 관리자에게 문의해주세요.");
     this.name = "CreditExhaustedError";
+  }
+}
+
+export class UserApiKeyMissingError extends Error {
+  constructor() {
+    super("API 키를 먼저 입력해주세요. 설정 → 내 API 키에서 Anthropic 키를 등록하면 글 생성이 가능합니다.");
+    this.name = "UserApiKeyMissingError";
   }
 }
 
