@@ -13,6 +13,20 @@ import { reviseDraftWithFeedback, UserApiKeyMissingError } from "@/lib/pipeline"
 import { CreditExhaustedError } from "@/lib/llm";
 import { sendTelegramToUser } from "@/lib/telegram";
 
+// LLM 호출 실패를 사용자에게 보여줄 친절한 메시지로 변환한다.
+// 인식 못 한 에러를 그대로 throw하면 서버 액션이 500으로 떨어지므로,
+// 폼에 결과를 돌려주는 액션에서는 이 함수로 메시지를 만들어 반환한다.
+function friendlyLlmError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/401|invalid_api_key|authentication/i.test(msg))
+    return "API 키가 올바르지 않습니다. 설정에서 키를 확인해주세요.";
+  if (/429|rate.?limit|overloaded/i.test(msg))
+    return "AI 서비스가 혼잡합니다. 잠시 후 다시 시도해주세요.";
+  if (/credit|billing|quota|insufficient/i.test(msg))
+    return "API 크레딧이 부족합니다. 결제 상태를 확인해주세요.";
+  return `초안 생성에 실패했습니다: ${msg.slice(0, 120)}`;
+}
+
 export async function saveDraftAction(formData: FormData) {
   const user = await requireUser();
   const id = String(formData.get("draftId"));
@@ -86,7 +100,7 @@ export async function rejectAndReviseAction(
     ) {
       return { error: err.message };
     }
-    throw err;
+    return { error: friendlyLlmError(err) };
   }
   revalidatePath(`/queue/${id}`);
   revalidatePath(`/queue`);
@@ -170,7 +184,7 @@ export async function generateNewDraftActionState(
     ) {
       return { error: err.message };
     }
-    throw err;
+    return { error: friendlyLlmError(err) };
   }
 
   redirect(`/queue/${draftId}`);

@@ -6,7 +6,7 @@ import { requireUser, requireAdmin } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { eq } from "drizzle-orm";
-import { encryptApiKey, decryptApiKey, maskApiKey } from "@/lib/crypto";
+import { decryptApiKey, maskApiKey, tryEncryptApiKey } from "@/lib/crypto";
 
 const SETTINGS_ANTHROPIC_KEY = "anthropic_api_key";
 const SETTINGS_OPENAI_KEY = "openai_api_key";
@@ -410,10 +410,11 @@ export async function saveUserApiKeyAction(
   const key = String(formData.get("apiKey") ?? "").trim();
   if (!key) return { ok: false, error: "API 키를 입력해주세요." };
 
-  const encrypted = encryptApiKey(key);
+  const enc = tryEncryptApiKey(key);
+  if (!enc.ok) return { ok: false, error: enc.error };
   await db
     .update(schema.users)
-    .set({ anthropicApiKey: encrypted, updatedAt: new Date().toISOString() })
+    .set({ anthropicApiKey: enc.value, updatedAt: new Date().toISOString() })
     .where(eq(schema.users.id, user.id));
 
   revalidatePath("/settings");
@@ -473,10 +474,11 @@ export async function saveUserOpenAIKeyAction(
   const key = String(formData.get("apiKey") ?? "").trim();
   if (!key) return { ok: false, error: "API 키를 입력해주세요." };
 
-  const encrypted = encryptApiKey(key);
+  const enc = tryEncryptApiKey(key);
+  if (!enc.ok) return { ok: false, error: enc.error };
   await db
     .update(schema.users)
-    .set({ openaiApiKey: encrypted, updatedAt: new Date().toISOString() })
+    .set({ openaiApiKey: enc.value, updatedAt: new Date().toISOString() })
     .where(eq(schema.users.id, user.id));
 
   revalidatePath("/settings");
@@ -551,8 +553,10 @@ export async function saveUserUnsplashKeyAction(
   }
   const key = String(formData.get("apiKey") ?? "").trim();
   if (!key) return { ok: false, error: "API 키를 입력해주세요." };
+  const enc = tryEncryptApiKey(key);
+  if (!enc.ok) return { ok: false, error: enc.error };
   await db.update(schema.users)
-    .set({ unsplashKey: encryptApiKey(key), updatedAt: new Date().toISOString() })
+    .set({ unsplashKey: enc.value, updatedAt: new Date().toISOString() })
     .where(eq(schema.users.id, user.id));
   revalidatePath("/settings");
   return { ok: true, masked: maskShortKey(key) };
@@ -567,8 +571,10 @@ export async function saveUserPexelsKeyAction(
   }
   const key = String(formData.get("apiKey") ?? "").trim();
   if (!key) return { ok: false, error: "API 키를 입력해주세요." };
+  const enc = tryEncryptApiKey(key);
+  if (!enc.ok) return { ok: false, error: enc.error };
   await db.update(schema.users)
-    .set({ pexelsKey: encryptApiKey(key), updatedAt: new Date().toISOString() })
+    .set({ pexelsKey: enc.value, updatedAt: new Date().toISOString() })
     .where(eq(schema.users.id, user.id));
   revalidatePath("/settings");
   return { ok: true, masked: maskShortKey(key) };
@@ -583,8 +589,10 @@ export async function saveUserGoogleAiKeyAction(
   }
   const key = String(formData.get("apiKey") ?? "").trim();
   if (!key) return { ok: false, error: "API 키를 입력해주세요." };
+  const enc = tryEncryptApiKey(key);
+  if (!enc.ok) return { ok: false, error: enc.error };
   await db.update(schema.users)
-    .set({ googleAiKey: encryptApiKey(key), updatedAt: new Date().toISOString() })
+    .set({ googleAiKey: enc.value, updatedAt: new Date().toISOString() })
     .where(eq(schema.users.id, user.id));
   revalidatePath("/settings");
   return { ok: true, masked: maskShortKey(key) };

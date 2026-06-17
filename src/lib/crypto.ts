@@ -37,6 +37,22 @@ export function decryptApiKey(stored: string): string {
   return Buffer.concat([decipher.update(enc), decipher.final()]).toString("utf8");
 }
 
+// 암호화 실패(예: 운영 환경 ENCRYPTION_KEY 미설정)를 throw 대신 결과로 돌려준다.
+// 서버 액션이 이 결과를 {ok:false,error}로 전달하면 폼이 버튼이 죽은 듯 보이는 대신 원인을 표시한다.
+export function tryEncryptApiKey(
+  plaintext: string
+): { ok: true; value: string } | { ok: false; error: string } {
+  try {
+    return { ok: true, value: encryptApiKey(plaintext) };
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    const error = raw.includes("ENCRYPTION_KEY")
+      ? "서버 암호화 키(ENCRYPTION_KEY)가 설정되지 않아 저장할 수 없습니다. 관리자에게 문의하세요."
+      : "키 암호화에 실패했습니다.";
+    return { ok: false, error };
+  }
+}
+
 export function maskApiKey(apiKey: string): string {
   if (apiKey.length <= 10) return "sk-****";
   return `${apiKey.slice(0, 7)}****${apiKey.slice(-4)}`;

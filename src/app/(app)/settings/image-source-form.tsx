@@ -72,15 +72,24 @@ function KeyForm({
   const [showKey, setShowKey] = useState(false);
   const [masked, setMasked] = useState(initialMasked);
   const [testResult, setTestResult] = useState<TestResult>(null);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [savePending, startSave] = useTransition();
   const [testPending, startTest] = useTransition();
 
   function handleSave(formData: FormData) {
+    setSaveMsg(null);
     startSave(async () => {
-      const result = await config.saveAction(formData);
-      if (result.ok) {
-        setMasked(result.masked);
-        setTestResult(null);
+      try {
+        const result = await config.saveAction(formData);
+        if (result.ok) {
+          setMasked(result.masked);
+          setTestResult(null);
+          setSaveMsg({ ok: true, text: "저장됨 ✓" });
+        } else {
+          setSaveMsg({ ok: false, text: result.error });
+        }
+      } catch {
+        setSaveMsg({ ok: false, text: "저장 중 오류가 발생했습니다." });
       }
     });
   }
@@ -147,6 +156,11 @@ function KeyForm({
           <Badge tone={testResult.ok ? "leaf" : "amber"}>
             {testResult.message}
           </Badge>
+        )}
+        {saveMsg && (
+          <span className={`text-sm ${saveMsg.ok ? "text-green-600" : "text-red-600"}`}>
+            {saveMsg.text}
+          </span>
         )}
       </div>
     </form>
@@ -249,13 +263,25 @@ function KeyFormWithConfig({
   const [showKey, setShowKey] = useState(false);
   const [masked, setMasked] = useState(initialMasked);
   const [testResult, setTestResult] = useState<TestResult>(null);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [savePending, startSave] = useTransition();
   const [testPending, startTest] = useTransition();
 
   function handleSave(formData: FormData) {
+    setSaveMsg(null);
     startSave(async () => {
-      const result = await config.saveAction(formData);
-      if (result.ok) { setMasked(result.masked); setTestResult(null); }
+      try {
+        const result = await config.saveAction(formData);
+        if (result.ok) {
+          setMasked(result.masked);
+          setTestResult(null);
+          setSaveMsg({ ok: true, text: "저장됨 ✓" });
+        } else {
+          setSaveMsg({ ok: false, text: result.error });
+        }
+      } catch {
+        setSaveMsg({ ok: false, text: "저장 중 오류가 발생했습니다." });
+      }
     });
   }
 
@@ -303,6 +329,11 @@ function KeyFormWithConfig({
           {testPending && <Loader2 className="size-4 animate-spin" />}연결 테스트
         </Button>
         {testResult && <Badge tone={testResult.ok ? "leaf" : "amber"}>{testResult.message}</Badge>}
+        {saveMsg && (
+          <span className={`text-sm ${saveMsg.ok ? "text-green-600" : "text-red-600"}`}>
+            {saveMsg.text}
+          </span>
+        )}
       </div>
     </form>
   );

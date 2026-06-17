@@ -18,15 +18,24 @@ export function TelegramForm({
   const [showToken, setShowToken] = useState(false);
   const [tokenMasked, setTokenMasked] = useState(initialTokenMasked);
   const [testResult, setTestResult] = useState<TestResult>(null);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [tokenSavePending, startTokenSave] = useTransition();
   const [testPending, startTest] = useTransition();
 
   function handleTokenSave(formData: FormData) {
+    setSaveMsg(null);
     startTokenSave(async () => {
-      const result = await saveTelegramTokenAction(formData);
-      if (result.ok) {
-        setTokenMasked(result.masked);
-        setTestResult(null);
+      try {
+        const result = await saveTelegramTokenAction(formData);
+        if (result.ok) {
+          setTokenMasked(result.masked);
+          setTestResult(null);
+          setSaveMsg({ ok: true, text: "저장됨 ✓" });
+        } else {
+          setSaveMsg({ ok: false, text: result.error });
+        }
+      } catch {
+        setSaveMsg({ ok: false, text: "저장 중 오류가 발생했습니다." });
       }
     });
   }
@@ -80,10 +89,17 @@ export function TelegramForm({
           에게 <code className="text-[11px]">/newbot</code> 명령으로 봇 생성 후 토큰을 복사하세요.
           개별 알림 수신은 각 계정의 <strong>내 계정 → 텔레그램 알림</strong>에서 Chat ID를 등록하면 됩니다.
         </p>
-        <Button type="submit" size="sm" disabled={tokenSavePending}>
-          {tokenSavePending && <Loader2 className="size-4 animate-spin" />}
-          Bot Token 저장
-        </Button>
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button type="submit" size="sm" disabled={tokenSavePending}>
+            {tokenSavePending && <Loader2 className="size-4 animate-spin" />}
+            Bot Token 저장
+          </Button>
+          {saveMsg && (
+            <span className={`text-sm ${saveMsg.ok ? "text-green-600" : "text-red-600"}`}>
+              {saveMsg.text}
+            </span>
+          )}
+        </div>
       </form>
 
       <div className="border-t border-paper-300" />

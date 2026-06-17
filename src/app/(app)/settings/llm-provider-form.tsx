@@ -38,27 +38,45 @@ export function LLMProviderForm({
   const [testPending, startTest] = useTransition();
   const [anthropicSavePending, startAnthropicSave] = useTransition();
   const [anthropicTestPending, startAnthropicTest] = useTransition();
+  const [providerError, setProviderError] = useState<string | null>(null);
+  const [anthropicSaveMsg, setAnthropicSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [openaiSaveMsg, setOpenaiSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   function handleProviderChange(next: "anthropic" | "openai") {
     if (next === provider || providerPending) return;
     setProviderSaved(false);
+    setProviderError(null);
     startProvider(async () => {
-      const fd = new FormData();
-      fd.append("provider", next);
-      const res = await saveLLMProviderAction(fd);
-      if (res.ok) {
-        setProvider(next);
-        setProviderSaved(true);
+      try {
+        const fd = new FormData();
+        fd.append("provider", next);
+        const res = await saveLLMProviderAction(fd);
+        if (res.ok) {
+          setProvider(next);
+          setProviderSaved(true);
+        } else {
+          setProviderError(res.error ?? "전환에 실패했습니다.");
+        }
+      } catch {
+        setProviderError("전환 중 오류가 발생했습니다.");
       }
     });
   }
 
   function handleSaveAnthropic(formData: FormData) {
+    setAnthropicSaveMsg(null);
     startAnthropicSave(async () => {
-      const res = await saveUserApiKeyAction(formData);
-      if (res.ok) {
-        setAnthropicMasked(res.masked);
-        setAnthropicTestResult(null);
+      try {
+        const res = await saveUserApiKeyAction(formData);
+        if (res.ok) {
+          setAnthropicMasked(res.masked);
+          setAnthropicTestResult(null);
+          setAnthropicSaveMsg({ ok: true, text: "저장됨 ✓" });
+        } else {
+          setAnthropicSaveMsg({ ok: false, text: res.error });
+        }
+      } catch {
+        setAnthropicSaveMsg({ ok: false, text: "저장 중 오류가 발생했습니다." });
       }
     });
   }
@@ -71,11 +89,19 @@ export function LLMProviderForm({
   }
 
   function handleSaveOpenAI(formData: FormData) {
+    setOpenaiSaveMsg(null);
     startSave(async () => {
-      const res = await saveUserOpenAIKeyAction(formData);
-      if (res.ok) {
-        setOpenaiMasked(res.masked);
-        setTestResult(null);
+      try {
+        const res = await saveUserOpenAIKeyAction(formData);
+        if (res.ok) {
+          setOpenaiMasked(res.masked);
+          setTestResult(null);
+          setOpenaiSaveMsg({ ok: true, text: "저장됨 ✓" });
+        } else {
+          setOpenaiSaveMsg({ ok: false, text: res.error });
+        }
+      } catch {
+        setOpenaiSaveMsg({ ok: false, text: "저장 중 오류가 발생했습니다." });
       }
     });
   }
@@ -132,6 +158,9 @@ export function LLMProviderForm({
           </p>
           {providerSaved && (
             <span className="text-xs text-green-600 font-medium">저장됨 ✓</span>
+          )}
+          {providerError && (
+            <span className="text-xs text-red-600 font-medium">{providerError}</span>
           )}
         </div>
       </div>
@@ -196,6 +225,11 @@ export function LLMProviderForm({
             </Button>
             {anthropicTestResult && (
               <Badge tone={anthropicTestResult.ok ? "leaf" : "amber"}>{anthropicTestResult.message}</Badge>
+            )}
+            {anthropicSaveMsg && (
+              <span className={`text-sm ${anthropicSaveMsg.ok ? "text-green-600" : "text-red-600"}`}>
+                {anthropicSaveMsg.text}
+              </span>
             )}
           </div>
         </form>
@@ -262,6 +296,11 @@ export function LLMProviderForm({
             </Button>
             {testResult && (
               <Badge tone={testResult.ok ? "leaf" : "amber"}>{testResult.message}</Badge>
+            )}
+            {openaiSaveMsg && (
+              <span className={`text-sm ${openaiSaveMsg.ok ? "text-green-600" : "text-red-600"}`}>
+                {openaiSaveMsg.text}
+              </span>
             )}
           </div>
         </form>
