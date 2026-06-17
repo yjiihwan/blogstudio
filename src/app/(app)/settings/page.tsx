@@ -13,12 +13,10 @@ import {
   getImageApiKeyInfo,
   getLLMProviderInfo,
 } from "./actions";
-import { ApiKeyForm } from "./api-key-form";
 import { ImageSourceForm, UserImageSourceForm } from "./image-source-form";
 import { TelegramForm } from "./telegram-form";
 import { LLMProviderForm } from "./llm-provider-form";
-import { SystemOpenAIKeyForm } from "./system-openai-key-form";
-import { env } from "@/lib/env";
+import { SystemLLMForm } from "./system-llm-form";
 import { SystemChip, PersonalChip } from "@/components/ui/key-type-chip";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 
@@ -42,11 +40,12 @@ export default async function SettingsPage() {
     getImageApiKeyInfo(),
     getLLMProviderInfo(),
   ]);
-  const envConnected = env.ANTHROPIC_API_KEY.length > 0;
-  const isConnected = !!dbMasked || envConnected;
   const isAdmin = userApiKeyInfo.role === "admin";
   const telegramTokenMasked = isAdmin ? await getStoredTelegramTokenMasked() : null;
   const isUserKeyMode = userApiKeyInfo.mode === "user_key";
+  // 어드민 통합 카드의 헤더 배지: 현재 선택된 provider의 시스템 키가 등록돼 있는가
+  const selectedSystemKeyConnected =
+    llmProviderInfo.provider === "openai" ? !!systemOpenAIMasked : !!dbMasked;
 
   return (
     <div className="px-5 lg:px-10 py-8 lg:py-12 max-w-3xl mx-auto">
@@ -58,54 +57,30 @@ export default async function SettingsPage() {
       </header>
 
       <div className="space-y-3">
-        {/* ── Anthropic 시스템 키 (어드민) ─────────────────────── */}
+        {/* ── AI 글쓰기 설정 (어드민 = 시스템) ─────────────────── */}
         {isAdmin && (
           <Card>
             <CardContent>
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2">
-                  <h2 className="font-bold text-base">Anthropic API 키</h2>
+                  <h2 className="font-bold text-base">AI 글쓰기 설정</h2>
                   <SystemChip />
                 </div>
-                {isConnected ? (
+                {selectedSystemKeyConnected ? (
                   <Badge tone="leaf">연결됨</Badge>
                 ) : (
                   <Badge tone="amber">미연결</Badge>
                 )}
               </div>
               <p className="text-sm text-ink-600 leading-relaxed mb-4">
-                전체 시스템에서 사용하는 Claude API 키입니다. 시스템 키 모드로 설정된 계정이 공유합니다.
+                사용할 LLM(Claude 또는 ChatGPT)을 고르고 해당 API 키를 등록하세요.
+                이 키는 전체 시스템이 공유하는 키이며, 글 생성·재작성에 사용됩니다.
               </p>
-              {envConnected && !dbMasked && (
-                <p className="text-xs text-ink-500 mb-3 bg-paper-200 rounded-lg px-3 py-2">
-                  현재 <code className="text-[11px]">.env.local</code>의 키로 연결 중입니다.
-                  아래에 직접 입력하면 DB에 저장되어 우선 적용됩니다.
-                </p>
-              )}
-              <ApiKeyForm initialMasked={dbMasked} />
-            </CardContent>
-          </Card>
-        )}
-
-        {/* ── OpenAI 시스템 키 (어드민) ────────────────────────── */}
-        {isAdmin && (
-          <Card>
-            <CardContent>
-              <div className="flex items-center justify-between mb-1">
-                <div className="flex items-center gap-2">
-                  <h2 className="font-bold text-base">OpenAI API 키</h2>
-                  <SystemChip />
-                </div>
-                {systemOpenAIMasked ? (
-                  <Badge tone="leaf">연결됨</Badge>
-                ) : (
-                  <Badge tone="neutral">미연결</Badge>
-                )}
-              </div>
-              <p className="text-sm text-ink-600 leading-relaxed mb-4">
-                시스템 키 모드 계정이 ChatGPT(OpenAI)를 선택했을 때 공유하는 키입니다.
-              </p>
-              <SystemOpenAIKeyForm initialMasked={systemOpenAIMasked} />
+              <SystemLLMForm
+                initialProvider={llmProviderInfo.provider}
+                initialAnthropicMasked={dbMasked}
+                initialOpenAIMasked={systemOpenAIMasked}
+              />
             </CardContent>
           </Card>
         )}
@@ -132,8 +107,8 @@ export default async function SettingsPage() {
           </Card>
         )}
 
-        {/* ── LLM 선택 + 개인 키 (유저 키 모드) ───────────────── */}
-        {isUserKeyMode && (
+        {/* ── LLM 선택 + 개인 키 (일반 사용자, 유저 키 모드) ──── */}
+        {!isAdmin && isUserKeyMode && (
           <Card>
             <CardContent>
               <div className="flex items-center justify-between mb-1">

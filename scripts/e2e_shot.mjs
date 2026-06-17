@@ -1,0 +1,17 @@
+import puppeteer from "puppeteer-core";
+const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const BASE = "http://127.0.0.1:3001";
+const OUT = "/Users/ideagent/shared_inbox/results";
+const DRAFT = process.argv[2];
+const browser = await puppeteer.launch({ executablePath: CHROME, headless: "new", args: ["--no-sandbox", "--window-size=1280,1600"] });
+const page = await browser.newPage();
+await page.setViewport({ width: 1280, height: 1600 });
+await page.goto(`${BASE}/login`, { waitUntil: "networkidle0" });
+await page.type('input[name="email"]', "admin@blogstudio.local");
+await page.type('input[name="password"]', "studio1234!");
+await Promise.all([page.click('button[type="submit"]'), page.waitForNavigation({ waitUntil: "networkidle0" }).catch(() => {})]);
+await page.goto(`${BASE}/queue/${DRAFT}`, { waitUntil: "networkidle0" });
+await new Promise((r) => setTimeout(r, 1200));
+await page.screenshot({ path: `${OUT}/e2e_draft_preview.png`, fullPage: true });
+console.log("[SHOT] saved", page.url());
+await browser.close();

@@ -1,12 +1,13 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import {
   changeRoleAction,
   toggleActiveAction,
   deleteUserAction,
   approveUserAction,
   rejectUserAction,
+  resetPasswordAction,
   setApiKeyModeAction,
   setImageApiKeyModeAction,
 } from "./actions";
@@ -73,6 +74,24 @@ function StatusBadge({ status }: { status: User["status"] }) {
 
 function UserRow({ user: u, isSelf }: { user: User; isSelf: boolean }) {
   const [pending, startTransition] = useTransition();
+  const [tempPw, setTempPw] = useState<string | null>(null);
+  const [pwError, setPwError] = useState<string | null>(null);
+
+  const handleResetPassword = () => {
+    if (
+      !confirm(
+        `${u.name}(${u.email})의 비밀번호를 재설정할까요?\n임시 비밀번호가 생성되며, 사용자에게 전달해주세요.`
+      )
+    )
+      return;
+    setTempPw(null);
+    setPwError(null);
+    startTransition(async () => {
+      const res = await resetPasswordAction(u.id);
+      if (res.ok) setTempPw(res.tempPassword);
+      else setPwError(res.error);
+    });
+  };
 
   const handleRole = () => {
     startTransition(() =>
@@ -238,6 +257,14 @@ function UserRow({ user: u, isSelf }: { user: User; isSelf: boolean }) {
                   </button>
                 )}
                 <button
+                  onClick={handleResetPassword}
+                  disabled={pending}
+                  title="임시 비밀번호를 생성해 이 사용자의 비밀번호를 재설정합니다."
+                  className="text-xs px-2.5 py-1 rounded-lg border border-amber-200 hover:border-amber-400 text-amber-600 hover:text-amber-800 transition disabled:opacity-40"
+                >
+                  비번 재설정
+                </button>
+                <button
                   onClick={handleToggle}
                   disabled={pending}
                   className="text-xs px-2.5 py-1 rounded-lg border border-paper-300 hover:border-ink-400 text-ink-600 hover:text-ink-900 transition disabled:opacity-40"
@@ -254,6 +281,32 @@ function UserRow({ user: u, isSelf }: { user: User; isSelf: boolean }) {
               삭제
             </button>
           </div>
+        )}
+        {tempPw && (
+          <div className="mt-2 flex items-center gap-2 justify-end flex-wrap rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+            <span className="text-xs text-amber-800">임시 비밀번호:</span>
+            <code className="text-sm font-mono font-bold text-ink-900 select-all">{tempPw}</code>
+            <button
+              type="button"
+              onClick={() => navigator.clipboard?.writeText(tempPw).catch(() => {})}
+              className="text-xs px-2 py-0.5 rounded border border-amber-300 hover:border-amber-500 text-amber-700 transition"
+            >
+              복사
+            </button>
+            <button
+              type="button"
+              onClick={() => setTempPw(null)}
+              className="text-xs px-2 py-0.5 rounded border border-paper-300 hover:border-ink-400 text-ink-500 transition"
+            >
+              닫기
+            </button>
+            <span className="w-full text-[11px] text-amber-700/80">
+              이 값을 사용자에게 전달하세요. 사용자는 로그인 후 [내 계정]에서 비밀번호를 변경할 수 있습니다.
+            </span>
+          </div>
+        )}
+        {pwError && (
+          <div className="mt-2 text-xs text-red-600 text-right">{pwError}</div>
         )}
       </td>
     </tr>

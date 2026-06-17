@@ -387,9 +387,12 @@ export async function saveLLMProviderAction(
   if (provider !== "anthropic" && provider !== "openai") {
     return { ok: false, error: "올바른 provider 값이 아닙니다." };
   }
+  // admin = 시스템 운영자. admin은 항상 시스템 키 모드를 사용한다(개인 키 개념 없음).
+  const adminPatch =
+    user.role === "admin" ? { apiKeyMode: "system" as const } : {};
   await db
     .update(schema.users)
-    .set({ llmProvider: provider, updatedAt: new Date().toISOString() })
+    .set({ llmProvider: provider, ...adminPatch, updatedAt: new Date().toISOString() })
     .where(eq(schema.users.id, user.id));
   revalidatePath("/settings");
   return { ok: true };

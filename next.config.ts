@@ -18,7 +18,16 @@ const SECURITY_HEADERS = [
 const nextConfig: NextConfig = {
   // 네이티브 모듈 및 번들러 비호환 패키지는 외부로 분리
   serverExternalPackages: ["better-sqlite3", "openai", "@anthropic-ai/sdk"],
-  allowedDevOrigins: ["*.trycloudflare.com", "*.loca.lt", "100.85.154.17"],
+  allowedDevOrigins: [
+    "*.trycloudflare.com",
+    "*.loca.lt",
+    "100.85.154.17",
+    // Tailscale 호스트명 접속 시 /_next dev 리소스(클라이언트 JS) 차단 방지.
+    // 막히면 페이지는 SSR로 보이나 하이드레이션이 안 돼 모든 버튼이 죽는다.
+    "ide-macmini.taila25bd1.ts.net",
+    "*.taila25bd1.ts.net",
+    "*.ts.net",
+  ],
   poweredByHeader: false,
   async headers() {
     return [

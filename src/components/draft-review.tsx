@@ -114,7 +114,14 @@ export function DraftReview(p: ReviewProps) {
     });
   }
 
-  async function copyAndOpenNaver() {
+  function copyAndOpenNaver() {
+    /* Open the Naver editor FIRST, synchronously within the click gesture, so
+       Safari (incl. mobile) doesn't block it as a non-user-initiated popup.
+       The clipboard write below is async and would otherwise break the gesture. */
+    window.open(
+      `https://blog.naver.com/${p.naverBlogId}?Redirect=Write`,
+      "_blank"
+    );
     /* Build Naver-paste payload: bold the H2s, paragraphs separated.
        For images we leave alt-text placeholders the user will fill in. */
     const naverText = body
@@ -122,14 +129,12 @@ export function DraftReview(p: ReviewProps) {
       .replace(/<!--\s*IMG:slot=(\d+)\s*-->/g, "{이미지 $1}")
       .trim();
     const payload = `${title}\n\n${naverText}`;
-    try {
-      await navigator.clipboard.writeText(payload);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    } catch {}
-    window.open(
-      `https://blog.naver.com/${p.naverBlogId}?Redirect=Write`,
-      "_blank"
+    navigator.clipboard.writeText(payload).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2500);
+      },
+      () => {}
     );
   }
 
