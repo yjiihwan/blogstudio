@@ -1,63 +1,19 @@
 /**
- * Cron tick — run every 5 minutes from launchd/cron:
+ * Cron tick — 단발 실행 진입점 (로컬 launchd/cron 또는 외부 cron용):
  *   * /5 * * * *  cd /Users/ideagent/blog_studio && npm run -s cron:tick
  *
- * For each enabled schedule, if nextRunAt has passed, kick off
- * generateDraftForBlog and update lastRunAt + nextRunAt (with jitter).
+ * prod(Railway)에서는 인앱 스케줄러(src/instrumentation.ts)가 동일 로직을
+ * 주기 실행한다 — 둘 다 src/lib/cron.ts 의 runCronTick 를 공유한다.
  */
-import { db, schema } from "@/db/client";
-import { eq } from "drizzle-orm";
-import { generateDraftForBlog } from "@/lib/pipeline";
-import { CronExpressionParser } from "cron-parser";
+import { runCronTick } from "@/lib/cron";
 
-function nextRun(cron: string, jitterMin: number, from = new Date()) {
-  try {
-    const it = CronExpressionParser.parse(cron, { currentDate: from });
-    const base = it.next().toDate();
-    const offsetMs =
-      (Math.random() * 2 - 1) * jitterMin * 60_000;
-    return new Date(base.getTime() + offsetMs);
-  } catch {
-    // Fallback: next hour
-    return new Date(from.getTime() + 60 * 60_000);
-  }
-}
-
-async function main() {
-  const now = new Date();
-  const schedules = await db.query.schedules.findMany({
-    where: eq(schema.schedules.enabled, true),
-    with: { blog: true },
+runCronTick((m) => console.log(m))
+  .then((r) =>
+    console.log(
+      `[cron] done — checked=${r.checked} generated=${r.generated} failed=${r.failed}`
+    )
+  )
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
   });
-
-  for (const s of schedules) {
-    const due =
-      !s.nextRunAt || new Date(s.nextRunAt).getTime() <= now.getTime();
-    if (!due) continue;
-    if (s.blog.status !== "active") continue;
-
-    console.log(`[cron] generating draft for ${s.blog.displayName}`);
-    try {
-      // 소유자 맥락으로 생성 — user_key 모드에서 소유자 API 키가 적용되도록
-      const d = await generateDraftForBlog(s.blogId, s.blog.ownerId ?? undefined);
-      console.log(`  → draft ${d.id}`);
-    } catch (e) {
-      console.error(`  ✗ failed: ${(e as Error).message}`);
-    }
-
-    const next = nextRun(s.cron, s.jitterMin, now);
-    await db
-      .update(schema.schedules)
-      .set({
-        lastRunAt: now.toISOString(),
-        nextRunAt: next.toISOString(),
-        updatedAt: now.toISOString(),
-      })
-      .where(eq(schema.schedules.id, s.id));
-  }
-}
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
