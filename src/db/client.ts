@@ -6,9 +6,22 @@ import * as schema from "./schema";
 import { reconcileSchema } from "./reconcile";
 import { ensureAdminSeed } from "./bootstrap";
 
-const DB_PATH =
-  process.env.DATABASE_URL?.replace(/^file:/, "") ??
-  path.join(process.cwd(), ".data", "studio.db");
+// WHY: DATABASE_URL이 런타임에 안 잡히면 .data/studio.db 로 조용히 폴백한다. 그 결과
+// 세션 JWT의 uid가 "다른 DB"에 대해 발급/검증되어, getCurrentUser 가 사용자를 못 찾고
+// requireUser 가 UNAUTHENTICATED 를 던진다(설정 저장 "무반응"의 근본원인 = DB split-brain).
+// 프로덕션에선 폴백을 금지하고, 어떤 DB를 열었는지 절대경로를 반드시 로깅한다.
+function resolveDbPath(): string {
+  const raw = process.env.DATABASE_URL?.replace(/^file:/, "").trim();
+  if (raw) return path.resolve(raw);
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "DATABASE_URL is required in production — refusing silent fallback to .data/studio.db (auth split-brain 방지)"
+    );
+  }
+  return path.join(process.cwd(), ".data", "studio.db");
+}
+
+const DB_PATH = resolveDbPath();
 
 // 지연 초기화(lazy): 모듈 import 만으로는 DB를 열지 않는다.
 // `next build`의 "collect page data" 단계는 라우트 모듈을 로드하는데, 이때 DB를 열면
@@ -22,6 +35,7 @@ function getSqlite(): Database.Database {
   const dir = path.dirname(DB_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const s = new Database(DB_PATH);
+  console.log("[client] sqlite open:", DB_PATH);
   s.pragma("journal_mode = WAL");
   s.pragma("foreign_keys = ON");
   _sqlite = s;

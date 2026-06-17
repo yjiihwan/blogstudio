@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import { db, schema } from "@/db/client";
 import { eq, inArray, sql } from "drizzle-orm";
@@ -66,7 +67,10 @@ export async function getCurrentUser() {
 
 export async function requireUser() {
   const u = await getCurrentUser();
-  if (!u) throw new Error("UNAUTHENTICATED");
+  // WHY: 세션 쿠키가 없거나(만료) uid가 현재 DB에 없으면(=옛 DB로 발급된 stale 세션)
+  // UNAUTHENTICATED 를 던지면 서버액션/렌더가 "무반응"으로 삼켜진다. 조용히 던지는 대신
+  // 로그인으로 보내 재인증을 유도한다(요청 스코프에서만 호출되므로 redirect 안전).
+  if (!u) redirect("/login?expired=1");
   return u;
 }
 
