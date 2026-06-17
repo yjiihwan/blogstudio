@@ -302,10 +302,24 @@ export async function getStoredTelegramTokenMasked(): Promise<string | null> {
 export async function saveTelegramTokenAction(
   formData: FormData
 ): Promise<{ ok: true; masked: string } | { ok: false; error: string }> {
-  await requireAdmin();
+  try {
+    await requireAdmin();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === "FORBIDDEN") return { ok: false, error: "권한이 없습니다(관리자 전용)." };
+    return { ok: false, error: "세션이 만료되었습니다. 다시 로그인해주세요." };
+  }
   const token = String(formData.get("botToken") ?? "").trim();
   if (!token) return { ok: false, error: "Bot Token을 입력해주세요." };
-  await saveKey(TELEGRAM_TOKEN_KEY, token);
+  try {
+    await saveKey(TELEGRAM_TOKEN_KEY, token);
+  } catch (err) {
+    // WHY: 운영(Railway)에서 DB 쓰기 실패(읽기전용 FS·볼륨 미마운트 등) 시
+    // 버튼이 죽은 듯 보이던 증상 제거 — 실제 원인을 화면에 노출.
+    const raw = err instanceof Error ? err.message : String(err);
+    console.error("[settings] saveTelegramTokenAction DB write failed:", raw);
+    return { ok: false, error: `저장 실패(서버 DB 쓰기 오류): ${raw.slice(0, 120)}` };
+  }
   revalidatePath("/settings");
   return { ok: true, masked: maskToken(token) };
 }
