@@ -20,13 +20,7 @@ import { LLMProviderForm } from "./llm-provider-form";
 import { SystemOpenAIKeyForm } from "./system-openai-key-form";
 import { env } from "@/lib/env";
 import { SystemChip, PersonalChip } from "@/components/ui/key-type-chip";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Info } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 
 export default async function SettingsPage() {
   const [
@@ -149,25 +143,12 @@ export default async function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Badge tone="amber">개인 키 모드</Badge>
-                  <TooltipProvider delayDuration={200}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="text-ink-400 hover:text-ink-700 transition-colors rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-600"
-                          aria-label="개인 키 모드 설명"
-                        >
-                          <Info className="size-3.5" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" align="end" className="max-w-[240px] text-xs leading-relaxed">
-                        <p className="font-semibold mb-0.5">API 비용은 본인 계정으로 직접 청구됩니다.</p>
-                        <p className="text-ink-400">
-                          등록한 API 키로 글이 생성되며, 사용량은 Anthropic·OpenAI 대시보드에서 확인할 수 있습니다.
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <InfoTooltip label="개인 키 모드 설명">
+                    <p className="font-semibold mb-0.5">API 비용은 본인 계정으로 직접 청구됩니다.</p>
+                    <p className="text-ink-400">
+                      등록한 API 키로 글이 생성되며, 사용량은 Anthropic·OpenAI 대시보드에서 확인할 수 있습니다.
+                    </p>
+                  </InfoTooltip>
                 </div>
               </div>
               <p className="text-xs text-ink-500 leading-relaxed mb-3 sm:hidden">
