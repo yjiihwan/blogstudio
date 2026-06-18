@@ -10,13 +10,26 @@ import {
   requireUser,
 } from "@/lib/auth";
 import { reviseDraftWithFeedback, UserApiKeyMissingError } from "@/lib/pipeline";
-import { CreditExhaustedError } from "@/lib/llm";
+import {
+  CreditExhaustedError,
+  ApiKeyUndecryptableError,
+  SystemApiKeyMissingError,
+} from "@/lib/llm";
 import { sendTelegramToUser } from "@/lib/telegram";
 
 // LLM 호출 실패를 사용자에게 보여줄 친절한 메시지로 변환한다.
 // 인식 못 한 에러를 그대로 throw하면 서버 액션이 500으로 떨어지므로,
 // 폼에 결과를 돌려주는 액션에서는 이 함수로 메시지를 만들어 반환한다.
 function friendlyLlmError(err: unknown): string {
+  // 메시지가 곧 사용자 안내인 도메인 에러는 그대로 노출(원인을 정확히 알려줌).
+  if (
+    err instanceof ApiKeyUndecryptableError ||
+    err instanceof SystemApiKeyMissingError ||
+    err instanceof UserApiKeyMissingError ||
+    err instanceof CreditExhaustedError
+  ) {
+    return err.message;
+  }
   const msg = err instanceof Error ? err.message : String(err);
   if (/401|invalid_api_key|authentication/i.test(msg))
     return "API 키가 올바르지 않습니다. 설정에서 키를 확인해주세요.";

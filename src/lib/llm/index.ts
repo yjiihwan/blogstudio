@@ -27,6 +27,41 @@ export class UserApiKeyMissingError extends Error {
   }
 }
 
+// 저장된 개인 키를 복호화할 수 없을 때(주로 ENCRYPTION_KEY가 키 저장 시점과
+// 달라진 경우). 과거엔 이 실패를 삼키고 시스템 키로 폴백했는데, 그 시스템 키가
+// 플레이스홀더면 결국 401이 나면서 "키가 올바르지 않습니다"라는 엉뚱한 안내가 떴다.
+export class ApiKeyUndecryptableError extends Error {
+  constructor(provider: "anthropic" | "openai" = "anthropic") {
+    const label = provider === "openai" ? "OpenAI" : "Anthropic";
+    super(
+      `저장된 ${label} 키를 복호화할 수 없습니다. 설정 → 내 API 키에서 키를 다시 입력해주세요.`
+    );
+    this.name = "ApiKeyUndecryptableError";
+  }
+}
+
+// 시스템(공용) 키가 없거나 플레이스홀더라 실제 호출이 불가능할 때 — 운영자 조치 필요.
+export class SystemApiKeyMissingError extends Error {
+  constructor(provider: "anthropic" | "openai" = "anthropic") {
+    const label = provider === "openai" ? "OpenAI" : "Anthropic";
+    super(
+      `시스템 ${label} 키가 설정되지 않았습니다. 관리자에게 문의해주세요. (설정 → 시스템 키)`
+    );
+    this.name = "SystemApiKeyMissingError";
+  }
+}
+
+// 명백한 테스트/플레이스홀더 키는 실제 API로 보내면 401만 유발하므로 "키 없음"으로 취급한다.
+// 예: "sk-ant-api03-E2E-TEST-DO-NOT-USE-0000"
+function isPlaceholderKey(k: string | null | undefined): boolean {
+  if (!k) return true;
+  if (/E2E[-_ ]?TEST|DO[-_ ]?NOT[-_ ]?USE|PLACEHOLDER|XXXX|YOUR[-_ ]?KEY/i.test(k))
+    return true;
+  // 정상 키 길이에 한참 못 미치면(잘린/더미) 무효 처리
+  if (k.replace(/[^A-Za-z0-9_-]/g, "").length < 24) return true;
+  return false;
+}
+
 export type LLMMessage = { role: "user" | "assistant"; content: string };
 
 export type LLMOptions = {
@@ -109,34 +144,57 @@ async function getSystemProvider(): Promise<"anthropic" | "openai"> {
   return "anthropic";
 }
 
+// 시스템 키 모드 해소: 선택된 provider의 시스템 키가 플레이스홀더/누락이면
+// 실제 키가 있는 다른 provider로 자동 전환(가동률 우선). 둘 다 없으면 명시적 에러.
+async function resolveSystemProviderAndKey(): Promise<ProviderKey> {
+  const primary = await getSystemProvider();
+  const primaryKey = await getSystemKey(primary);
+  if (!isPlaceholderKey(primaryKey)) return { provider: primary, apiKey: primaryKey };
+
+  const alt = primary === "anthropic" ? "openai" : "anthropic";
+  const altKey = await getSystemKey(alt);
+  if (!isPlaceholderKey(altKey)) {
+    console.warn(
+      `[llm] 시스템 ${primary} 키가 플레이스홀더/누락 → 유효한 ${alt} 키로 자동 전환`
+    );
+    return { provider: alt, apiKey: altKey };
+  }
+  // 운영: 사실대로 에러를 띄운다(가짜 키를 API로 보내 401을 만들지 않는다).
+  // 개발/테스트: 키 없이도 파이프라인이 돌도록 mock 경로(apiKey=null)로 떨어뜨린다.
+  if (process.env.NODE_ENV === "production") {
+    throw new SystemApiKeyMissingError(primary);
+  }
+  return { provider: primary, apiKey: null };
+}
+
 async function resolveProviderAndKey(userId?: string): Promise<ProviderKey> {
   if (userId) {
-    try {
-      const user = await db.query.users.findFirst({
-        where: eq(schema.users.id, userId),
-      });
-      if (user) {
-        if (user.apiKeyMode === "user_key") {
-          // 개인 키 모드: 유저 본인이 form에서 고른 provider + 본인 개인키 그대로.
-          const provider = (user.llmProvider ?? "anthropic") as "anthropic" | "openai";
-          const encKey =
-            provider === "anthropic" ? user.anthropicApiKey : user.openaiApiKey;
-          if (!encKey) throw new UserApiKeyMissingError(provider);
-          return { provider, apiKey: decryptApiKey(encKey) };
+    const user = await db.query.users
+      .findFirst({ where: eq(schema.users.id, userId) })
+      .catch(() => null);
+    if (user) {
+      if (user.apiKeyMode === "user_key") {
+        // 개인 키 모드: 유저 본인이 고른 provider + 본인 개인키. 실패해도 시스템 키로
+        // 몰래 폴백하지 않는다(폴백 키가 플레이스홀더면 401 + 엉뚱한 안내를 유발).
+        const provider = (user.llmProvider ?? "anthropic") as "anthropic" | "openai";
+        const encKey =
+          provider === "anthropic" ? user.anthropicApiKey : user.openaiApiKey;
+        if (!encKey) throw new UserApiKeyMissingError(provider);
+        let apiKey: string;
+        try {
+          apiKey = decryptApiKey(encKey);
+        } catch {
+          throw new ApiKeyUndecryptableError(provider);
         }
-        // 시스템 키 모드: 어드민이 정한 전역 provider를 따른다(개별 user.llmProvider 무시).
-        const provider = await getSystemProvider();
-        const apiKey = await getSystemKey(provider);
+        if (isPlaceholderKey(apiKey)) throw new UserApiKeyMissingError(provider);
         return { provider, apiKey };
       }
-    } catch (err) {
-      if (err instanceof UserApiKeyMissingError) throw err;
-      // DB/decrypt error → fall through to system Anthropic key
+      // 시스템 키 모드
+      return resolveSystemProviderAndKey();
     }
   }
-  // No user or lookup failed: Anthropic system key
-  const apiKey = await getSystemKey("anthropic");
-  return { provider: "anthropic", apiKey };
+  // 유저 맥락 없음(cron 등): 시스템 키 해소 경로 사용
+  return resolveSystemProviderAndKey();
 }
 
 export async function llm(opts: LLMOptions): Promise<LLMResult> {
@@ -176,6 +234,10 @@ async function callAnthropic(opts: LLMOptions, apiKey: string): Promise<LLMResul
   } catch (err) {
     if (err instanceof Anthropic.APIError) {
       const errType = (err.error as { type?: string } | null)?.type;
+      // 진짜 원인(상태코드·에러타입)을 서버 로그에 남긴다 — 진단용.
+      console.error(
+        `[llm] Anthropic 호출 실패 status=${err.status} type=${errType ?? "?"} model=${model} keyMask=${maskKey(apiKey)} msg=${err.message}`
+      );
       if (
         err.status === 402 ||
         errType === "credit_balance_exceeded" ||
@@ -183,6 +245,8 @@ async function callAnthropic(opts: LLMOptions, apiKey: string): Promise<LLMResul
       ) {
         throw new CreditExhaustedError();
       }
+    } else {
+      console.error(`[llm] Anthropic 호출 실패(비API에러):`, err);
     }
     throw err;
   }
@@ -211,7 +275,12 @@ async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> 
     });
   } catch (err) {
     if (err instanceof OpenAI.APIError) {
+      console.error(
+        `[llm] OpenAI 호출 실패 status=${err.status} code=${err.code ?? "?"} model=${model} keyMask=${maskKey(apiKey)} msg=${err.message}`
+      );
       if (err.status === 429 || err.status === 402) throw new CreditExhaustedError();
+    } else {
+      console.error(`[llm] OpenAI 호출 실패(비API에러):`, err);
     }
     throw err;
   }
@@ -220,6 +289,12 @@ async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> 
   const inT = res.usage?.prompt_tokens ?? 0;
   const outT = res.usage?.completion_tokens ?? 0;
   return { text, model, inputTokens: inT, outputTokens: outT, costCents: costFor(model, inT, outT), isMock: false };
+}
+
+// 로그에 키 원문이 새지 않도록 마스킹(앞 8자 + 길이만 노출).
+function maskKey(k: string | null | undefined): string {
+  if (!k) return "(none)";
+  return `${k.slice(0, 8)}…len${k.length}`;
 }
 
 export function roughTokenCount(s: string) {
