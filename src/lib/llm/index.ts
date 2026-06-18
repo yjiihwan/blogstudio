@@ -96,6 +96,13 @@ async function getSystemProvider(): Promise<"anthropic" | "openai"> {
       const p = JSON.parse(row.valueJson) as string;
       if (p === "openai" || p === "anthropic") return p;
     }
+    // 전역 설정이 비어있으면(전파 코드 배포 전 admin이 고른 경우 등) admin의 개인 선택으로 폴백.
+    // WHY: 무조건 anthropic 폴백 시, anthropic 시스템 키가 없거나 가짜면 system 모드 유저 전체가 401.
+    const admin = await db.query.users.findFirst({
+      where: eq(schema.users.role, "admin"),
+    });
+    const ap = admin?.llmProvider;
+    if (ap === "openai" || ap === "anthropic") return ap;
   } catch {
     // DB read failure → fall back to anthropic
   }
