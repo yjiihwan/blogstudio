@@ -15,6 +15,18 @@ async function getBotToken(): Promise<string | null> {
   return getSetting(TELEGRAM_TOKEN_KEY);
 }
 
+/** 봇 토큰을 반환(연결/웹훅 모듈에서 사용). 절대 프론트로 노출하지 말 것. */
+export async function getTelegramBotToken(): Promise<string | null> {
+  return getBotToken();
+}
+
+/** chat_id 로 직접 메시지 발송(웹훅 응답용). 토큰 없으면 no-op. */
+export async function sendTelegramRawMessage(chatId: string, message: string): Promise<void> {
+  const token = await getBotToken();
+  if (!token) return;
+  await sendMessage(token, chatId, message);
+}
+
 async function sendMessage(
   token: string,
   chatId: string,

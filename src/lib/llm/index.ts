@@ -87,6 +87,21 @@ async function getSystemKey(provider: "anthropic" | "openai"): Promise<string | 
     : env.OPENAI_API_KEY || null;
 }
 
+async function getSystemProvider(): Promise<"anthropic" | "openai"> {
+  try {
+    const row = await db.query.settings.findFirst({
+      where: eq(schema.settings.key, "system_llm_provider"),
+    });
+    if (row) {
+      const p = JSON.parse(row.valueJson) as string;
+      if (p === "openai" || p === "anthropic") return p;
+    }
+  } catch {
+    // DB read failure → fall back to anthropic
+  }
+  return "anthropic";
+}
+
 async function resolveProviderAndKey(userId?: string): Promise<ProviderKey> {
   if (userId) {
     try {
@@ -94,14 +109,16 @@ async function resolveProviderAndKey(userId?: string): Promise<ProviderKey> {
         where: eq(schema.users.id, userId),
       });
       if (user) {
-        const provider = (user.llmProvider ?? "anthropic") as "anthropic" | "openai";
         if (user.apiKeyMode === "user_key") {
+          // 개인 키 모드: 유저 본인이 form에서 고른 provider + 본인 개인키 그대로.
+          const provider = (user.llmProvider ?? "anthropic") as "anthropic" | "openai";
           const encKey =
             provider === "anthropic" ? user.anthropicApiKey : user.openaiApiKey;
           if (!encKey) throw new UserApiKeyMissingError(provider);
           return { provider, apiKey: decryptApiKey(encKey) };
         }
-        // system key mode: use system key for the user's chosen provider
+        // 시스템 키 모드: 어드민이 정한 전역 provider를 따른다(개별 user.llmProvider 무시).
+        const provider = await getSystemProvider();
         const apiKey = await getSystemKey(provider);
         return { provider, apiKey };
       }

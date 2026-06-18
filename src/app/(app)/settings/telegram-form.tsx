@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { saveTelegramTokenAction, testTelegramAction } from "./actions";
+import { saveTelegramTokenAction, testTelegramAction, setupTelegramWebhookAction } from "./actions";
 
 type TestResult = { ok: boolean; message: string } | null;
 
@@ -21,6 +21,8 @@ export function TelegramForm({
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [tokenSavePending, startTokenSave] = useTransition();
   const [testPending, startTest] = useTransition();
+  const [hookPending, startHook] = useTransition();
+  const [hookResult, setHookResult] = useState<TestResult>(null);
 
   function handleTokenSave(formData: FormData) {
     setSaveMsg(null);
@@ -44,6 +46,14 @@ export function TelegramForm({
     startTest(async () => {
       const result = await testTelegramAction();
       setTestResult(result);
+    });
+  }
+
+  function handleSetupWebhook() {
+    setHookResult(null);
+    startHook(async () => {
+      const result = await setupTelegramWebhookAction();
+      setHookResult(result);
     });
   }
 
@@ -127,6 +137,32 @@ export function TelegramForm({
             {testResult.message}
           </Badge>
         )}
+      </div>
+
+      <div className="border-t border-paper-300" />
+
+      {/* 셀프-연결 webhook 등록 — 유저가 /start 로 스스로 알림을 연결하게 한다 */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={hookPending || !isReady}
+            onClick={handleSetupWebhook}
+            title={!isReady ? "Bot Token을 저장해야 등록할 수 있습니다." : undefined}
+          >
+            {hookPending && <Loader2 className="size-4 animate-spin" />}
+            셀프-연결 웹훅 등록
+          </Button>
+          {hookResult && (
+            <Badge tone={hookResult.ok ? "leaf" : "amber"}>{hookResult.message}</Badge>
+          )}
+        </div>
+        <p className="text-xs text-ink-500 leading-relaxed">
+          등록하면 일반 유저가 <strong>내 계정 → 텔레그램 알림</strong>의 “텔레그램으로 연결하기” 버튼만으로
+          본인 알림을 연결할 수 있습니다. (봇이 바뀌었거나 도메인이 변경되면 다시 눌러주세요.)
+        </p>
       </div>
     </div>
   );

@@ -7,9 +7,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { eq } from "drizzle-orm";
 import { decryptApiKey, maskApiKey, tryEncryptApiKey } from "@/lib/crypto";
+import { env } from "@/lib/env";
+import { ensureWebhookSecret, clearBotUsernameCache } from "@/lib/telegram-link";
 
 const SETTINGS_ANTHROPIC_KEY = "anthropic_api_key";
 const SETTINGS_OPENAI_KEY = "openai_api_key";
+const SETTINGS_SYSTEM_LLM_PROVIDER = "system_llm_provider";
 const UNSPLASH_KEY = "unsplash_access_key";
 const PEXELS_KEY = "pexels_api_key";
 const GOOGLE_AI_KEY = "google_ai_api_key";
@@ -313,6 +316,8 @@ export async function saveTelegramTokenAction(
   if (!token) return { ok: false, error: "Bot Token을 입력해주세요." };
   try {
     await saveKey(TELEGRAM_TOKEN_KEY, token);
+    // 봇이 교체될 수 있으므로 username 캐시 무효화(다음 조회 시 getMe 로 재해석).
+    await clearBotUsernameCache();
   } catch (err) {
     // WHY: 운영(Railway)에서 DB 쓰기 실패(읽기전용 FS·볼륨 미마운트 등) 시
     // 버튼이 죽은 듯 보이던 증상 제거 — 실제 원인을 화면에 노출.
@@ -345,6 +350,37 @@ export async function testTelegramAction(): Promise<{ ok: boolean; message: stri
       return { ok: false, message: "Bot Token이 올바르지 않습니다." };
     }
     return { ok: false, message: `검증 실패: ${desc.slice(0, 80)}` };
+  } catch (err) {
+    return { ok: false, message: `연결 실패: ${err instanceof Error ? err.message.slice(0, 60) : String(err)}` };
+  }
+}
+
+// 텔레그램 셀프-연결용 webhook 등록. APP_URL/api/telegram/webhook 로 setWebhook 호출.
+export async function setupTelegramWebhookAction(): Promise<{ ok: boolean; message: string }> {
+  await requireAdmin();
+  const token = await getStoredKey(TELEGRAM_TOKEN_KEY);
+  if (!token) return { ok: false, message: "Bot Token을 먼저 저장하세요." };
+
+  const secret = await ensureWebhookSecret();
+  const url = `${env.APP_URL.replace(/\/$/, "")}/api/telegram/webhook`;
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${encodeURIComponent(token)}/setWebhook`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url,
+          secret_token: secret,
+          allowed_updates: ["message"],
+          drop_pending_updates: true,
+        }),
+        cache: "no-store",
+      }
+    );
+    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
+    if (data.ok) return { ok: true, message: `웹훅 등록 완료 → ${url}` };
+    return { ok: false, message: `등록 실패: ${(data.description ?? `HTTP ${res.status}`).slice(0, 100)}` };
   } catch (err) {
     return { ok: false, message: `연결 실패: ${err instanceof Error ? err.message.slice(0, 60) : String(err)}` };
   }
@@ -394,6 +430,18 @@ export async function saveLLMProviderAction(
     .update(schema.users)
     .set({ llmProvider: provider, ...adminPatch, updatedAt: new Date().toISOString() })
     .where(eq(schema.users.id, user.id));
+
+  // 어드민 선택은 전역 system_llm_provider 로도 저장 → 시스템 키 모드 유저 전체가 따른다.
+  if (user.role === "admin") {
+    await db
+      .insert(schema.settings)
+      .values({ key: SETTINGS_SYSTEM_LLM_PROVIDER, valueJson: JSON.stringify(provider) })
+      .onConflictDoUpdate({
+        target: schema.settings.key,
+        set: { valueJson: JSON.stringify(provider), updatedAt: new Date().toISOString() },
+      });
+  }
+
   revalidatePath("/settings");
   return { ok: true };
 }

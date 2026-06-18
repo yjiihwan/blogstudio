@@ -28,6 +28,8 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
     { name: "pexels_key", ddl: "`pexels_key` text" },
     { name: "google_ai_key", ddl: "`google_ai_key` text" },
     { name: "telegram_chat_id", ddl: "`telegram_chat_id` text" },
+    { name: "telegram_link_code", ddl: "`telegram_link_code` text" },
+    { name: "telegram_link_expires", ddl: "`telegram_link_expires` text" },
   ],
   blogs: [
     { name: "owner_id", ddl: "`owner_id` text REFERENCES `users`(`id`)" },

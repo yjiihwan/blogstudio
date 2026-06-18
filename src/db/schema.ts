@@ -42,6 +42,9 @@ export const users = sqliteTable("users", {
   pexelsKey: text("pexels_key"),
   googleAiKey: text("google_ai_key"),
   telegramChatId: text("telegram_chat_id"),
+  // 일회성 텔레그램 연결코드(딥링크 /start <code>)와 만료시각(ISO). 연결 완료 시 비운다.
+  telegramLinkCode: text("telegram_link_code"),
+  telegramLinkExpires: text("telegram_link_expires"),
   ...timestamps,
 });
 
