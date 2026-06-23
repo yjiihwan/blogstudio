@@ -65,6 +65,7 @@ export async function uploadPhotoAction(
       filePath: `/storage/${fileName}`,
       mimeType: file.type,
       fileSize: file.size,
+      sourceMetaJson: JSON.stringify({ slot: req.slot }),
     })
     .returning();
 

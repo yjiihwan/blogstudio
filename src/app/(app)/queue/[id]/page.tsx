@@ -48,13 +48,21 @@ export default async function DraftDetailPage({
   }>;
 
   const imageUrls: Record<number, string> = {};
+  const imgById = new Map(draft.images.map((i) => [i.id, i.filePath]));
+  // 1) sourceMeta.slot 기반 — 자동 소싱·반자동 폼 첨부 이미지
   for (const img of draft.images) {
     if (typeof img.filePath === "string") {
-      // For now use draft images that have a known slot via sourceMeta
       const meta = img.sourceMetaJson
         ? (JSON.parse(img.sourceMetaJson) as { slot?: number })
         : {};
       if (typeof meta.slot === "number") imageUrls[meta.slot] = img.filePath;
+    }
+  }
+  // 2) 사진 요청 업로드 기반 — uploadedImageId → slot (sourceMeta 없는 직접 업로드 컷)
+  for (const req of draft.imageRequests) {
+    if (req.uploadedImageId && imageUrls[req.slot] === undefined) {
+      const fp = imgById.get(req.uploadedImageId);
+      if (typeof fp === "string") imageUrls[req.slot] = fp;
     }
   }
 

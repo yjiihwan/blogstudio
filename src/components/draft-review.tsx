@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Save,
   ChevronDown,
+  Download,
 } from "lucide-react";
 import { renderMarkdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
@@ -81,6 +82,7 @@ export function DraftReview(p: ReviewProps) {
     Object.entries(p.imageUrls).map(([k, v]) => [Number(k), { url: v }])
   );
   const html = renderMarkdown(body, imgMap);
+  const readyImageCount = Object.keys(p.imageUrls).length;
 
   async function doSave() {
     const fd = new FormData();
@@ -227,43 +229,92 @@ export function DraftReview(p: ReviewProps) {
 
         {/* Image plan inline */}
         <div className="mt-4">
-          <h3 className="text-sm font-bold mb-2">이미지 플랜 {p.imagePlan.length}장</h3>
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+            <h3 className="text-sm font-bold">이미지 플랜 {p.imagePlan.length}장</h3>
+            {readyImageCount > 0 && (
+              <span className="text-[11px] text-leaf-600 font-medium">
+                준비됨 {readyImageCount}/{p.imagePlan.length}장
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-ink-500 mb-2 leading-relaxed">
+            ✓ 준비된 이미지는 <strong>다운로드</strong>해서, 네이버 에디터에 본문을 붙여넣은 뒤
+            본문 속 <code>{"{이미지 N}"}</code> 자리에 같은 번호 사진을 넣으세요.
+          </p>
           <ul className="grid sm:grid-cols-2 gap-2 text-xs">
             {p.imagePlan.map((img) => {
-              const hasUrl = !!p.imageUrls[img.slot];
+              const url = p.imageUrls[img.slot];
+              const hasUrl = !!url;
               return (
                 <li
                   key={img.slot}
-                  className="rounded-lg border border-paper-300 bg-paper-50 p-3 flex gap-3"
+                  className="rounded-lg border border-paper-300 bg-paper-50 p-3"
                 >
-                  <div
-                    className={cn(
-                      "size-14 shrink-0 rounded-md flex items-center justify-center font-bold text-sm",
-                      hasUrl
-                        ? "bg-leaf-100 text-leaf-500"
-                        : img.needsUserShot
-                          ? "bg-accent-100 text-accent-700"
-                          : "bg-paper-200 text-ink-400"
+                  <div className="flex gap-3">
+                    {hasUrl ? (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="size-14 shrink-0 rounded-md overflow-hidden border border-paper-300 block"
+                        title="크게 보기"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={url} alt={`슬롯 ${img.slot}`} className="size-full object-cover" />
+                      </a>
+                    ) : (
+                      <div
+                        className={cn(
+                          "size-14 shrink-0 rounded-md flex items-center justify-center font-bold text-sm",
+                          img.needsUserShot
+                            ? "bg-accent-100 text-accent-700"
+                            : "bg-paper-200 text-ink-400"
+                        )}
+                      >
+                        {img.slot}
+                      </div>
                     )}
-                  >
-                    {hasUrl ? "✓" : img.slot}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-semibold text-ink-800 flex items-center gap-1 flex-wrap">
-                      슬롯 {img.slot}
-                      <span className="text-[10px] text-ink-400 font-normal">
-                        ({img.role})
-                      </span>
-                      {img.needsUserShot && !hasUrl && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-100 text-accent-700">
-                          직접 촬영 필요
+                    <div className="min-w-0">
+                      <div className="font-semibold text-ink-800 flex items-center gap-1 flex-wrap">
+                        슬롯 {img.slot}
+                        <span className="text-[10px] text-ink-400 font-normal">
+                          ({img.role})
                         </span>
-                      )}
-                    </div>
-                    <div className="text-ink-500 mt-0.5">
-                      {img.description}
+                        {hasUrl ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-leaf-100 text-leaf-600">
+                            준비됨
+                          </span>
+                        ) : (
+                          img.needsUserShot && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-100 text-accent-700">
+                              직접 촬영 필요
+                            </span>
+                          )
+                        )}
+                      </div>
+                      <div className="text-ink-500 mt-0.5">{img.description}</div>
                     </div>
                   </div>
+
+                  {hasUrl && (
+                    <div className="mt-2 flex items-center gap-3 pl-[68px]">
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] text-ink-500 hover:text-ink-800"
+                      >
+                        <ExternalLink className="size-3" /> 크게 보기
+                      </a>
+                      <a
+                        href={url}
+                        download={`이미지-슬롯${img.slot}.jpg`}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent-600 hover:text-accent-700"
+                      >
+                        <Download className="size-3" /> 다운로드
+                      </a>
+                    </div>
+                  )}
                 </li>
               );
             })}
