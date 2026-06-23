@@ -31,8 +31,9 @@ export default async function PhotosPage() {
           사진 요청
         </h1>
         <p className="mt-1.5 text-sm text-ink-500 max-w-xl">
-          AI가 글에 필요하다고 판단한 직접 촬영 컷입니다. 휴대폰으로
-          이 페이지를 열고 촬영·업로드하면 글에 자동으로 들어갑니다.
+          AI가 글에 필요하다고 판단한 이미지 자리입니다. 직접 촬영·업로드하거나,
+          <strong> 자동 이미지(스톡 검색 / AI 생성 / 스톡→AI)</strong>로 채울 수 있어요.
+          마음에 안 들면 피드백을 주고 다시 만들 수 있습니다.
         </p>
       </header>
 

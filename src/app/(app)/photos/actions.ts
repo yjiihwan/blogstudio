@@ -81,6 +81,28 @@ export async function uploadPhotoAction(
   return { success: true };
 }
 
+/** 자동 이미지 소싱(스톡/AI/스톡→AI) — 반려 피드백 재생성도 동일 액션. */
+export async function autoSourcePhotoAction(
+  requestId: string,
+  mode: "stock" | "ai" | "stock_then_ai",
+  feedback?: string
+): Promise<{ ok: boolean; error?: string; provider?: string; imageUrl?: string }> {
+  const user = await requireUser();
+  if (!requestId) return { ok: false, error: "요청 ID가 없습니다." };
+  const req = await db.query.imageRequests.findFirst({
+    where: eq(schema.imageRequests.id, requestId),
+  });
+  if (!req) return { ok: false, error: "요청을 찾을 수 없습니다." };
+  if (!(await getAccessibleDraft(req.draftId, user)))
+    return { ok: false, error: "권한이 없습니다." };
+
+  const { autoSourceForRequest } = await import("@/lib/image-sourcing");
+  const res = await autoSourceForRequest({ requestId, mode, userId: user.id, feedback });
+  if (!res.ok) return { ok: false, error: res.error };
+  // revalidate는 안 함 — 같은 카드에서 미리보기/반려/재생성 루프를 돌 수 있도록 카드를 유지.
+  return { ok: true, provider: res.provider, imageUrl: res.imageUrl };
+}
+
 export async function skipPhotoAction(
   _prevState: null,
   formData: FormData
