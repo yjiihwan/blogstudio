@@ -112,10 +112,25 @@ export function outlinePrompt(opts: {
     primaryKeyword: string;
     secondaryKeywords: string[];
   };
+  /** 반자동 모드: 사용자가 직접 지정한 내용 디테일. 있으면 반드시 충실히 반영. */
+  userBrief?: string;
+  /** 반자동 + 직접 업로드: 정확히 이 개수의 이미지 슬롯(slot 0..N-1)을 둔다. */
+  imageSlotCount?: number;
 }) {
+  const hasBrief = !!opts.userBrief?.trim();
+  const fixedImages = typeof opts.imageSlotCount === "number";
   return [
     `# 작업: 아래 주제로 글 구조(아웃라인) 만들기`,
     ``,
+    hasBrief
+      ? `⚠️ 이 글은 사용자가 주제와 내용을 **직접 지정**했습니다. 아래 "사용자 지정 내용"을 반드시 충실히 반영하세요. 다만 글의 말투·톤·금지어·길이·CTA 등 페르소나 규칙은 그대로 지킵니다(주제만 사용자 지정, 스타일은 페르소나).`
+      : null,
+    hasBrief ? `` : null,
+    hasBrief ? `**사용자 지정 내용**:` : null,
+    hasBrief ? "```" : null,
+    hasBrief ? opts.userBrief!.trim() : null,
+    hasBrief ? "```" : null,
+    hasBrief ? `` : null,
     `**제목 (최종은 본문 작성 단계에서 조정 가능)**: ${opts.topic.title}`,
     opts.topic.angle ? `**앵글**: ${opts.topic.angle}` : null,
     `**메인 키워드**: ${opts.topic.primaryKeyword}`,
@@ -124,7 +139,9 @@ export function outlinePrompt(opts: {
       : null,
     ``,
     `목표 길이: ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
-    `목표 이미지 수: ${opts.persona.imagesPerPostMin}~${opts.persona.imagesPerPostMax}장`,
+    fixedImages
+      ? `이미지: 사용자가 사진 ${opts.imageSlotCount}장을 직접 업로드했습니다. imagePlan에 정확히 ${opts.imageSlotCount}개의 슬롯(slot 0부터 ${Math.max(0, (opts.imageSlotCount ?? 0) - 1)}까지)을 만들고, 본문 흐름에 맞는 위치를 배정하세요. needsUserShot 은 모두 false(이미 업로드됨).`
+      : `목표 이미지 수: ${opts.persona.imagesPerPostMin}~${opts.persona.imagesPerPostMax}장`,
     ``,
     `아웃라인 형식 (JSON):`,
     "```json",
@@ -134,13 +151,15 @@ export function outlinePrompt(opts: {
     `    { "h2": "섹션 제목", "summary": "이 섹션에 들어갈 내용 요약", "needsImage": true }`,
     `  ],`,
     `  "imagePlan": [`,
-    `    { "slot": 0, "role": "hero|inline|store|product", "description": "찍을/넣을 이미지 묘사", "needsUserShot": true }`,
+    `    { "slot": 0, "role": "hero|inline|store|product", "description": "찍을/넣을 이미지 묘사", "needsUserShot": ${fixedImages ? "false" : "true"} }`,
     `  ]`,
     `}`,
     "```",
-    `JSON만 응답. 섹션은 3~5개. 이미지는 페르소나 설정 범위 내.`,
+    fixedImages
+      ? `JSON만 응답. 섹션은 3~5개. imagePlan은 정확히 ${opts.imageSlotCount}개.`
+      : `JSON만 응답. 섹션은 3~5개. 이미지는 페르소나 설정 범위 내.`,
   ]
-    .filter(Boolean)
+    .filter((x) => x !== null)
     .join("\n");
 }
 
@@ -149,10 +168,21 @@ export function bodyPrompt(opts: {
   persona: PersonaInput;
   topic: { title: string; primaryKeyword: string; secondaryKeywords: string[] };
   outline: unknown;
+  /** 반자동 모드: 사용자가 직접 지정한 내용 디테일. 있으면 반드시 충실히 반영. */
+  userBrief?: string;
 }) {
+  const hasBrief = !!opts.userBrief?.trim();
   return [
     `# 작업: 아래 아웃라인을 바탕으로 본문 작성`,
     ``,
+    hasBrief
+      ? `⚠️ 사용자가 주제·내용을 직접 지정한 글입니다. 아래 "사용자 지정 내용"을 반드시 충실히 반영하되, 말투·톤·금지어·길이·CTA 규칙은 페르소나 설정을 그대로 따르세요.`
+      : null,
+    hasBrief ? `**사용자 지정 내용**:` : null,
+    hasBrief ? "```" : null,
+    hasBrief ? opts.userBrief!.trim() : null,
+    hasBrief ? "```" : null,
+    hasBrief ? `` : null,
     `반드시 지킬 규칙:`,
     `1. 네이버 블로그 알고리즘 친화적 — 첫 1~2문단에 메인 키워드 자연스럽게 등장`,
     `2. 본문 ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
@@ -174,7 +204,9 @@ export function bodyPrompt(opts: {
     "```",
     ``,
     `Markdown 본문만 출력하세요. 메타정보·해설·코드블록 표시 없이.`,
-  ].join("\n");
+  ]
+    .filter((x) => x !== null)
+    .join("\n");
 }
 
 /** Step 4: revise on rejection feedback. */

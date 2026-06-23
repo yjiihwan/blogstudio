@@ -17,6 +17,9 @@ import {
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sendTelegramToUser } from "./telegram";
+import { nanoid } from "nanoid";
+import path from "node:path";
+import fs from "node:fs/promises";
 
 function safeJson<T = unknown>(text: string): T | null {
   // Tolerate code fences if the model slipped
@@ -295,6 +298,201 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
         `🖼️ 이미지 업로드가 필요합니다!\n블로그: ${blog.displayName}\n요청된 이미지를 업로드해 주세요.`
       );
     }
+  }
+
+  return draft;
+}
+
+/**
+ * 반자동 모드 — 사용자가 주제/내용을 직접 입력해 초안 생성.
+ * Step1(주제 자동탐색)은 건너뛰고 입력값을 사용하며, 아웃라인·본문은
+ * 페르소나를 그대로 적용해 작성한다(톤·금지어·길이·CTA 유지).
+ * 사진: photoMode='manual'이면 업로드 이미지를 본문 슬롯에 배치, 'auto'면 기존 사진요청 방식.
+ */
+export async function generateDraftFromBrief(opts: {
+  blogId: string;
+  callerUserId?: string;
+  title: string;
+  brief: string;
+  keywords?: string[];
+  photoMode: "manual" | "auto";
+  /** photoMode='manual'일 때 폼에서 첨부된 이미지(이미 읽은 버퍼). */
+  uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string }>;
+}) {
+  const blog = await db.query.blogs.findFirst({
+    where: eq(schema.blogs.id, opts.blogId),
+    with: { personas: true },
+  });
+  if (!blog) throw new Error("BLOG_NOT_FOUND");
+  const activePersona =
+    blog.personas.find((p) => p.isActive) ?? blog.personas[0];
+  if (!activePersona) throw new Error("PERSONA_MISSING");
+  const persona = personaFromRow(blog, activePersona);
+  const preamble = personaPreamble(persona);
+
+  const title = opts.title.trim();
+  const brief = opts.brief.trim();
+  const keywords = (opts.keywords ?? []).map((k) => k.trim()).filter(Boolean);
+  const primaryKeyword = keywords[0] ?? persona.focusKeywords[0] ?? title;
+  const secondaryKeywords = keywords.slice(1);
+  const manualImages = opts.photoMode === "manual" ? (opts.uploadedImages ?? []) : [];
+  const imageSlotCount = opts.photoMode === "manual" ? manualImages.length : undefined;
+
+  /* --- Step 1 대체: 사용자 지정 주제를 topicCandidate로 기록 --- */
+  const [topicRow] = await db
+    .insert(schema.topicCandidates)
+    .values({
+      blogId: opts.blogId,
+      title,
+      angle: brief ? brief.slice(0, 160) : null,
+      primaryKeyword,
+      secondaryKeywordsJson: JSON.stringify(secondaryKeywords),
+      score: null,
+      rationale: "사용자 직접 입력(반자동)",
+      source: "manual",
+      intentType: "informational",
+      status: "selected",
+    })
+    .returning();
+
+  /* --- Step 2: outline (사용자 brief + 고정 이미지 슬롯 반영) --- */
+  const outlineRes = await llm({
+    system: preamble,
+    callerUserId: opts.callerUserId,
+    messages: [
+      {
+        role: "user",
+        content: outlinePrompt({
+          persona,
+          topic: { title, angle: topicRow.angle, primaryKeyword, secondaryKeywords },
+          userBrief: brief,
+          imageSlotCount,
+        }),
+      },
+    ],
+  });
+  const outline = safeJson<{
+    hookParagraph: string;
+    sections: Array<{ h2: string; summary: string; needsImage: boolean }>;
+    imagePlan: Array<{
+      slot: number;
+      role: "hero" | "inline" | "store" | "product";
+      description: string;
+      needsUserShot: boolean;
+    }>;
+  }>(outlineRes.text) ?? { hookParagraph: "", sections: [], imagePlan: [] };
+
+  /* --- Step 3: body --- */
+  const bodyRes = await llm({
+    system: preamble,
+    callerUserId: opts.callerUserId,
+    messages: [
+      {
+        role: "user",
+        content: bodyPrompt({
+          persona,
+          topic: { title, primaryKeyword, secondaryKeywords },
+          outline,
+          userBrief: brief,
+        }),
+      },
+    ],
+  });
+  const bodyMd = bodyRes.text.trim();
+
+  /* --- Step 4: score --- */
+  const seo = scoreSeo({
+    title,
+    bodyMd,
+    primaryKeyword,
+    secondaryKeywords,
+    imageCount: outline.imagePlan.length,
+    minLen: persona.preferredLengthMin,
+    maxLen: persona.preferredLengthMax,
+  });
+  const human = scoreHuman({ bodyMd, forbiddenWords: persona.forbiddenWords });
+
+  const totalInTokens = outlineRes.inputTokens + bodyRes.inputTokens;
+  const totalOutTokens = outlineRes.outputTokens + bodyRes.outputTokens;
+  const totalCostCents = outlineRes.costCents + bodyRes.costCents;
+
+  /* --- Step 5: persist draft --- */
+  const [draft] = await db
+    .insert(schema.drafts)
+    .values({
+      blogId: opts.blogId,
+      topicId: topicRow.id,
+      title,
+      summary: brief ? brief.slice(0, 200) : null,
+      bodyMd,
+      imagePlanJson: JSON.stringify(outline.imagePlan),
+      status: "ready_for_review",
+      charCount: bodyMd.replace(/\s+/g, "").length,
+      imageCount: outline.imagePlan.length,
+      seoScore: seo.score,
+      seoIssuesJson: JSON.stringify(seo.checks.filter((c) => !c.ok).map((c) => c.label)),
+      humanScore: human.score,
+      llmModel: bodyRes.model,
+      llmInputTokens: totalInTokens,
+      llmOutputTokens: totalOutTokens,
+      llmCostCents: totalCostCents,
+    })
+    .returning();
+
+  await db.insert(schema.draftVersions).values({
+    draftId: draft.id,
+    revision: 0,
+    title: draft.title,
+    bodyMd: draft.bodyMd,
+    imagePlanJson: draft.imagePlanJson,
+    reasonForChange: "최초 생성(반자동)",
+  });
+
+  /* --- 사진 처리 --- */
+  if (opts.photoMode === "manual" && manualImages.length > 0) {
+    // 업로드된 이미지를 저장하고 본문 슬롯(0..N-1)에 직접 배치
+    const STORAGE_DIR = path.join(process.cwd(), "public", "storage");
+    await fs.mkdir(STORAGE_DIR, { recursive: true });
+    for (let i = 0; i < manualImages.length; i++) {
+      const img = manualImages[i];
+      const fileName = `${nanoid(16)}.${img.ext}`;
+      await fs.writeFile(path.join(STORAGE_DIR, fileName), img.buffer);
+      await db.insert(schema.images).values({
+        blogId: opts.blogId,
+        draftId: draft.id,
+        source: "upload",
+        filePath: `/storage/${fileName}`,
+        mimeType: img.mimeType,
+        fileSize: img.size,
+        sourceMetaJson: JSON.stringify({ slot: i }),
+      });
+    }
+  } else {
+    // 기존 방식 — AI가 user shot 필요로 표시한 슬롯을 사진 요청으로 생성
+    const userShotItems = outline.imagePlan.filter((p) => p.needsUserShot);
+    for (const it of userShotItems) {
+      await db.insert(schema.imageRequests).values({
+        draftId: draft.id,
+        slot: it.slot,
+        description: it.description,
+        composition: it.role === "hero" ? "탑다운, 자연광 1:1" : "16:9",
+      });
+    }
+  }
+
+  await db.insert(schema.notifications).values({
+    type: "draft_ready",
+    title: `초안 준비됨 — ${blog.displayName}`,
+    body: draft.title,
+    linkUrl: `/queue/${draft.id}`,
+    channel: "inapp",
+  });
+
+  if (opts.callerUserId) {
+    void sendTelegramToUser(
+      opts.callerUserId,
+      `📝 새 초안이 생성되었습니다! (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
+    );
   }
 
   return draft;

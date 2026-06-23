@@ -58,8 +58,9 @@ export default async function NewDraftPage() {
           새 초안 생성
         </h1>
         <p className="mt-1.5 text-sm text-ink-500">
-          AI가 페르소나 가이드와 시기적 맥락을 보고 주제부터 자동으로 정해
-          초안을 만듭니다. 약 15~40초 소요.
+          <strong>초안 생성</strong>은 AI가 주제부터 자동으로 정합니다(완전 자동).
+          이벤트·단발성 글처럼 직접 정한 주제로 쓰려면 <strong>직접 입력</strong>(반자동)을
+          쓰세요 — 페르소나는 그대로 적용됩니다. 약 15~40초 소요.
         </p>
       </header>
 
@@ -92,7 +93,15 @@ export default async function NewDraftPage() {
                     </div>
                   )}
                 </div>
-                <GenerateDraftButton blogId={b.id} />
+                <div className="flex flex-col items-end gap-1.5">
+                  <GenerateDraftButton blogId={b.id} />
+                  <Link
+                    href={`/queue/new/manual?blogId=${b.id}`}
+                    className="text-xs font-semibold text-accent-600 hover:text-accent-700 underline underline-offset-4"
+                  >
+                    직접 입력 →
+                  </Link>
+                </div>
               </CardContent>
             </Card>
           );

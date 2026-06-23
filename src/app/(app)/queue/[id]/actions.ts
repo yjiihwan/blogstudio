@@ -202,3 +202,72 @@ export async function generateNewDraftActionState(
 
   redirect(`/queue/${draftId}`);
 }
+
+const MANUAL_MAX_IMG = 10 * 1024 * 1024;
+const MANUAL_ALLOWED = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/heic",
+  "image/heif",
+  "image/webp",
+]);
+
+/** 반자동 — 사용자가 제목/내용 직접 입력 (+ 선택: 사진 직접 첨부) */
+export async function generateManualDraftActionState(
+  _prevState: GenerateDraftState,
+  formData: FormData
+): Promise<GenerateDraftState> {
+  const user = await requireUser();
+  const blogId = String(formData.get("blogId") ?? "");
+  if (!blogId) return { error: "블로그가 지정되지 않았습니다." };
+  if (!(await getAccessibleBlog(blogId, user)))
+    return { error: "권한이 없습니다." };
+
+  const title = String(formData.get("title") ?? "").trim();
+  const brief = String(formData.get("brief") ?? "").trim();
+  if (!title) return { error: "제목(주제)을 입력해주세요." };
+  if (!brief) return { error: "내용 디테일을 입력해주세요." };
+
+  const keywords = String(formData.get("keywords") ?? "")
+    .split(/[,\n]/)
+    .map((k) => k.trim())
+    .filter(Boolean);
+  const photoMode = String(formData.get("photoMode") ?? "auto") === "manual" ? "manual" : "auto";
+
+  // 직접 첨부 사진 읽기
+  const uploadedImages: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string }> = [];
+  if (photoMode === "manual") {
+    const files = formData.getAll("photos").filter((f): f is File => f instanceof File && f.size > 0);
+    for (const file of files) {
+      if (file.size > MANUAL_MAX_IMG) return { error: `사진이 너무 큽니다(최대 10MB): ${file.name}` };
+      if (!MANUAL_ALLOWED.has(file.type)) return { error: `지원하지 않는 형식: ${file.name} (JPG/PNG/HEIC/WebP)` };
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      uploadedImages.push({ buffer, mimeType: file.type, size: file.size, ext });
+    }
+  }
+
+  let draftId: string;
+  try {
+    const { generateDraftFromBrief } = await import("@/lib/pipeline");
+    const draft = await generateDraftFromBrief({
+      blogId,
+      callerUserId: user.id,
+      title,
+      brief,
+      keywords,
+      photoMode,
+      uploadedImages,
+    });
+    revalidatePath("/queue");
+    revalidatePath("/dashboard");
+    draftId = draft.id;
+  } catch (err) {
+    if (err instanceof CreditExhaustedError || err instanceof UserApiKeyMissingError) {
+      return { error: err.message };
+    }
+    return { error: friendlyLlmError(err) };
+  }
+
+  redirect(`/queue/${draftId}`);
+}
