@@ -132,7 +132,7 @@ export function ManualDraftForm({
               </p>
             )}
             <p className="mt-1 text-[11px] text-ink-400">
-              ※ 첨부 사진은 <strong>합쳐서 최대 50MB</strong>까지 가능합니다. 초과 시 사진 수를 줄여주세요.
+              ※ 사진은 <strong>원본 그대로</strong> 올라갑니다(화질·EXIF 유지). 합쳐서 <strong>최대 100MB</strong>까지 가능하며, 초과 시 사진 수를 줄여주세요.
             </p>
           </div>
         )}
