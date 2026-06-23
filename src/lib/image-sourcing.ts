@@ -11,13 +11,9 @@ import { resolveImageKeys } from "./image-keys";
 import { decryptApiKey } from "./crypto";
 import { llm } from "./llm";
 import OpenAI from "openai";
-import { nanoid } from "nanoid";
-import path from "node:path";
-import fs from "node:fs/promises";
+import { saveImageBuffer, deleteImageFile } from "./storage";
 
 export type AutoMode = "stock" | "ai" | "stock_then_ai";
-
-const STORAGE_DIR = path.join(process.cwd(), "public", "storage");
 
 type Sourced = { buffer: Buffer; mimeType: string; ext: string; source: "stock_free" | "ai_generated"; meta: Record<string, unknown> };
 
@@ -252,9 +248,7 @@ export async function autoSourceForRequest(opts: {
   const sourced = await sourceByMode(opts.mode, req.description, opts.userId, opts.feedback);
   if ("error" in sourced) return { ok: false, error: sourced.error };
 
-  await fs.mkdir(STORAGE_DIR, { recursive: true });
-  const fileName = `${nanoid(16)}.${sourced.ext}`;
-  await fs.writeFile(path.join(STORAGE_DIR, fileName), sourced.buffer);
+  const { urlPath, size } = await saveImageBuffer(sourced.buffer, sourced.ext);
 
   const [img] = await db
     .insert(schema.images)
@@ -262,9 +256,9 @@ export async function autoSourceForRequest(opts: {
       blogId: req.draft.blogId,
       draftId: req.draftId,
       source: sourced.source,
-      filePath: `/storage/${fileName}`,
+      filePath: urlPath,
       mimeType: sourced.mimeType,
-      fileSize: sourced.buffer.length,
+      fileSize: size,
       sourceMetaJson: JSON.stringify({
         slot: req.slot,
         ...sourced.meta,
@@ -288,9 +282,7 @@ export async function autoSourceForRequest(opts: {
   if (prevImageId && prevImageId !== img.id) {
     const prev = await db.query.images.findFirst({ where: eq(schema.images.id, prevImageId) });
     if (prev) {
-      if (prev.filePath?.startsWith("/storage/")) {
-        await fs.rm(path.join(process.cwd(), "public", prev.filePath), { force: true }).catch(() => {});
-      }
+      await deleteImageFile(prev.filePath);
       await db.delete(schema.images).where(eq(schema.images.id, prevImageId));
     }
   }

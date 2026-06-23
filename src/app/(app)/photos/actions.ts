@@ -4,11 +4,8 @@ import { revalidatePath } from "next/cache";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
 import { getAccessibleDraft, requireUser } from "@/lib/auth";
-import { nanoid } from "nanoid";
-import path from "node:path";
-import fs from "node:fs/promises";
+import { saveImageBuffer } from "@/lib/storage";
 
-const STORAGE_DIR = path.join(process.cwd(), "public", "storage");
 const MAX_SIZE = 10 * 1024 * 1024;
 const ALLOWED_TYPES = new Set([
   "image/jpeg",
@@ -17,10 +14,6 @@ const ALLOWED_TYPES = new Set([
   "image/heif",
   "image/webp",
 ]);
-
-async function ensureStorageDir() {
-  await fs.mkdir(STORAGE_DIR, { recursive: true });
-}
 
 export async function uploadPhotoAction(
   _prevState: { success?: boolean; error?: string } | null,
@@ -46,15 +39,9 @@ export async function uploadPhotoAction(
   if (!(await getAccessibleDraft(req.draftId, user)))
     return { error: "권한이 없습니다." };
 
-  await ensureStorageDir();
-
   const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
-  const imgId = nanoid(16);
-  const fileName = `${imgId}.${ext}`;
-  const filePath = path.join(STORAGE_DIR, fileName);
-
   const bytes = await file.arrayBuffer();
-  await fs.writeFile(filePath, Buffer.from(bytes));
+  const { urlPath, size } = await saveImageBuffer(Buffer.from(bytes), ext);
 
   const [newImage] = await db
     .insert(schema.images)
@@ -62,9 +49,9 @@ export async function uploadPhotoAction(
       blogId: req.draft.blogId,
       draftId: req.draftId,
       source: "user_shot",
-      filePath: `/storage/${fileName}`,
+      filePath: urlPath,
       mimeType: file.type,
-      fileSize: file.size,
+      fileSize: size,
       sourceMetaJson: JSON.stringify({ slot: req.slot }),
     })
     .returning();

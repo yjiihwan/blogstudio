@@ -18,9 +18,7 @@ import {
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sendTelegramToUser } from "./telegram";
 import { globalGuideBlock } from "./global-guide";
-import { nanoid } from "nanoid";
-import path from "node:path";
-import fs from "node:fs/promises";
+import { saveImageBuffer } from "./storage";
 
 /**
  * 시스템 프롬프트 = 서비스 전체 공통 가이드(최우선) + 블로그 페르소나.
@@ -462,19 +460,16 @@ export async function generateDraftFromBrief(opts: {
   /* --- 사진 처리 --- */
   if (opts.photoMode === "manual" && manualImages.length > 0) {
     // 업로드된 이미지를 저장하고 본문 슬롯(0..N-1)에 직접 배치
-    const STORAGE_DIR = path.join(process.cwd(), "public", "storage");
-    await fs.mkdir(STORAGE_DIR, { recursive: true });
     for (let i = 0; i < manualImages.length; i++) {
       const img = manualImages[i];
-      const fileName = `${nanoid(16)}.${img.ext}`;
-      await fs.writeFile(path.join(STORAGE_DIR, fileName), img.buffer);
+      const { urlPath, size } = await saveImageBuffer(img.buffer, img.ext);
       await db.insert(schema.images).values({
         blogId: opts.blogId,
         draftId: draft.id,
         source: "upload",
-        filePath: `/storage/${fileName}`,
+        filePath: urlPath,
         mimeType: img.mimeType,
-        fileSize: img.size,
+        fileSize: size,
         sourceMetaJson: JSON.stringify({ slot: i }),
       });
     }
