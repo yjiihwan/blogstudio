@@ -233,17 +233,34 @@ export function UserImageSourceForm({
 
       <div className="border-t border-paper-300" />
 
+      {/* AI 이미지 생성 — 실제 엔진은 OpenAI gpt-image-1 */}
+      <div className="rounded-lg bg-paper-100 px-4 py-3">
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-sm font-semibold">
+            AI 이미지 생성 <span className="text-ink-500 font-normal">· OpenAI gpt-image-1</span>
+          </p>
+          <Badge tone="leaf">OpenAI 키 사용</Badge>
+        </div>
+        <p className="text-xs text-ink-500">
+          사진 요청에서 <strong>AI 생성 / 스톡→AI</strong>를 고르면 이미지를 생성합니다.
+          별도 키 등록은 필요 없고, 위 <strong>AI 글쓰기 설정의 OpenAI 키</strong>를 그대로 사용합니다.
+        </p>
+      </div>
+
       <div>
         <div className="flex items-center justify-between mb-1">
           <p className="text-sm font-semibold">
-            Google Imagen <span className="text-ink-500 font-normal">· Gemini API · 텍스트→이미지 생성</span>
+            Google Imagen{" "}
+            <span className="text-ink-500 font-normal">· 고급(선택) · 텍스트→이미지</span>
           </p>
-          <Badge tone={googleAiMasked ? "leaf" : "neutral"}>
-            {googleAiMasked ? "연결됨" : "미연결"}
+          <Badge tone={googleAiMasked ? "amber" : "neutral"}>
+            {googleAiMasked ? "키 등록됨 · 현재 미작동" : "미사용"}
           </Badge>
         </div>
         <p className="text-xs text-ink-500 mb-3">
-          모델: <code className="text-[11px]">imagen-3.0-generate-002</code>. Google AI Studio에서 키를 발급받아 등록하세요.
+          모델 <code className="text-[11px]">imagen-3.0-generate-002</code>는 Google 유료 티어에서만 동작합니다.
+          현재 일반 Google AI Studio 키로는 접근이 안 돼(404), AI 생성은 OpenAI로 처리됩니다.
+          키를 등록해두면 추후 imagen 사용이 가능해질 때 자동으로 우선 사용합니다.
         </p>
         <KeyFormWithConfig source="googleai" initialMasked={googleAiMasked} config={USER_SOURCES.googleai} />
       </div>
@@ -382,19 +399,34 @@ export function ImageSourceForm({
 
       <div className="border-t border-paper-300" />
 
-      {/* Google Imagen */}
+      {/* AI 이미지 생성 — OpenAI gpt-image-1 */}
+      <div className="rounded-lg bg-paper-100 px-4 py-3">
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-sm font-semibold">
+            AI 이미지 생성 <span className="text-ink-500 font-normal">· OpenAI gpt-image-1</span>
+          </p>
+          <Badge tone="leaf">OpenAI 키 사용</Badge>
+        </div>
+        <p className="text-xs text-ink-500">
+          사진 요청에서 <strong>AI 생성 / 스톡→AI</strong> 선택 시 이미지를 생성합니다.
+          별도 키 없이 OpenAI 키를 그대로 사용합니다.
+        </p>
+      </div>
+
+      {/* Google Imagen — 고급(선택), 현재 미작동 */}
       <div>
         <div className="flex items-center justify-between mb-1">
           <p className="text-sm font-semibold">
             Google Imagen{" "}
-            <span className="text-ink-500 font-normal">· Gemini API · 텍스트→이미지 생성</span>
+            <span className="text-ink-500 font-normal">· 고급(선택) · 텍스트→이미지</span>
           </p>
-          <Badge tone={googleAiMasked ? "leaf" : "neutral"}>
-            {googleAiMasked ? "연결됨" : "미연결"}
+          <Badge tone={googleAiMasked ? "amber" : "neutral"}>
+            {googleAiMasked ? "키 등록됨 · 현재 미작동" : "미사용"}
           </Badge>
         </div>
         <p className="text-xs text-ink-500 mb-3">
-          모델: <code className="text-[11px]">imagen-3.0-generate-002</code> 사용 예정. Google AI Studio에서 키를 발급받아 등록하세요.
+          <code className="text-[11px]">imagen-3.0-generate-002</code>는 Google 유료 티어 전용입니다.
+          일반 키로는 접근 불가(404)라 AI 생성은 OpenAI로 처리됩니다. 등록해두면 추후 사용 가능 시 우선 적용됩니다.
         </p>
         <KeyForm source="googleai" initialMasked={googleAiMasked} />
       </div>
