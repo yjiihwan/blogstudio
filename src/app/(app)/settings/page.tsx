@@ -12,11 +12,13 @@ import {
   getUserApiKeyInfo,
   getImageApiKeyInfo,
   getLLMProviderInfo,
+  getGlobalGuideForAdmin,
 } from "./actions";
 import { ImageSourceForm, UserImageSourceForm } from "./image-source-form";
 import { TelegramForm } from "./telegram-form";
 import { LLMProviderForm } from "./llm-provider-form";
 import { SystemLLMForm } from "./system-llm-form";
+import { GlobalGuideForm } from "./GlobalGuideForm";
 import { SystemChip, PersonalChip } from "@/components/ui/key-type-chip";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 
@@ -42,6 +44,7 @@ export default async function SettingsPage() {
   ]);
   const isAdmin = userApiKeyInfo.role === "admin";
   const telegramTokenMasked = isAdmin ? await getStoredTelegramTokenMasked() : null;
+  const globalGuide = isAdmin ? await getGlobalGuideForAdmin() : null;
   const isUserKeyMode = userApiKeyInfo.mode === "user_key";
   // 어드민 통합 카드의 헤더 배지: 현재 선택된 provider의 시스템 키가 등록돼 있는가
   const selectedSystemKeyConnected =
@@ -57,6 +60,35 @@ export default async function SettingsPage() {
       </header>
 
       <div className="space-y-3">
+        {/* ── 서비스 전체 글쓰기 가이드 (어드민 전용) ──────────── */}
+        {isAdmin && globalGuide && (
+          <Card>
+            <CardContent>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <h2 className="font-bold text-base">서비스 전체 글쓰기 가이드</h2>
+                  <SystemChip />
+                </div>
+                {globalGuide.enabled ? (
+                  <Badge tone="leaf">적용 중</Badge>
+                ) : (
+                  <Badge tone="neutral">미적용</Badge>
+                )}
+              </div>
+              <p className="text-sm text-ink-600 leading-relaxed mb-4">
+                모든 블로그·모든 초안에 공통으로 강제되는 상위 규칙입니다.
+                AI 티 나는 글 등 무조건 걸러야 할 케이스를 여기에 못박아 두면,
+                개별 페르소나 설정과 무관하게 사전에 차단됩니다.
+              </p>
+              <GlobalGuideForm
+                initialEnabled={globalGuide.enabled}
+                initialText={globalGuide.text}
+                defaultText={globalGuide.defaultText}
+              />
+            </CardContent>
+          </Card>
+        )}
+
         {/* ── AI 글쓰기 설정 (어드민 = 시스템) ─────────────────── */}
         {isAdmin && (
           <Card>

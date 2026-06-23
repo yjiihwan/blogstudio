@@ -175,6 +175,43 @@ async function saveKey(settingsKey: string, value: string): Promise<void> {
     });
 }
 
+// ── 서비스 전체 글쓰기 가이드 (관리자 전용) ─────────────────────────────────────
+
+export async function getGlobalGuideForAdmin(): Promise<{
+  enabled: boolean;
+  text: string;
+  defaultText: string;
+}> {
+  await requireAdmin();
+  const { getGlobalWritingGuide, DEFAULT_GLOBAL_GUIDE } = await import(
+    "@/lib/global-guide"
+  );
+  const g = await getGlobalWritingGuide();
+  return { enabled: g.enabled, text: g.text, defaultText: DEFAULT_GLOBAL_GUIDE };
+}
+
+export async function saveGlobalGuideAction(
+  formData: FormData
+): Promise<{ ok: boolean; error?: string }> {
+  await requireAdmin();
+  const { GLOBAL_GUIDE_KEY } = await import("@/lib/global-guide");
+  const enabledRaw = String(formData.get("enabled") ?? "");
+  const enabled = enabledRaw === "on" || enabledRaw === "true";
+  const text = String(formData.get("text") ?? "").trim();
+  await db
+    .insert(schema.settings)
+    .values({ key: GLOBAL_GUIDE_KEY, valueJson: JSON.stringify({ enabled, text }) })
+    .onConflictDoUpdate({
+      target: schema.settings.key,
+      set: {
+        valueJson: JSON.stringify({ enabled, text }),
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
 // ── Unsplash ──────────────────────────────────────────────────────────────────
 
 export async function getStoredUnsplashKeyMasked(): Promise<string | null> {

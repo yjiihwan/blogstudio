@@ -17,9 +17,20 @@ import {
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sendTelegramToUser } from "./telegram";
+import { globalGuideBlock } from "./global-guide";
 import { nanoid } from "nanoid";
 import path from "node:path";
 import fs from "node:fs/promises";
+
+/**
+ * 시스템 프롬프트 = 서비스 전체 공통 가이드(최우선) + 블로그 페르소나.
+ * 모든 초안 생성/재작성이 이걸 써서, 전역 규칙이 페르소나보다 우선 적용된다.
+ */
+async function buildSystemPreamble(persona: PersonaInput): Promise<string> {
+  const guide = await globalGuideBlock();
+  const personaText = personaPreamble(persona);
+  return [guide, personaText].filter(Boolean).join("\n\n");
+}
 
 function safeJson<T = unknown>(text: string): T | null {
   // Tolerate code fences if the model slipped
@@ -79,7 +90,7 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
     blog.personas.find((p) => p.isActive) ?? blog.personas[0];
   if (!activePersona) throw new Error("PERSONA_MISSING");
   const persona = personaFromRow(blog, activePersona);
-  const preamble = personaPreamble(persona);
+  const preamble = await buildSystemPreamble(persona);
 
   /* --- Step 1: discover topic candidates (skip if any selected unused topic exists) --- */
   const recent = await db.query.drafts.findMany({
@@ -328,7 +339,7 @@ export async function generateDraftFromBrief(opts: {
     blog.personas.find((p) => p.isActive) ?? blog.personas[0];
   if (!activePersona) throw new Error("PERSONA_MISSING");
   const persona = personaFromRow(blog, activePersona);
-  const preamble = personaPreamble(persona);
+  const preamble = await buildSystemPreamble(persona);
 
   const title = opts.title.trim();
   const brief = opts.brief.trim();
@@ -514,7 +525,7 @@ export async function reviseDraftWithFeedback(opts: {
     draft.blog.personas.find((p) => p.isActive) ?? draft.blog.personas[0];
   if (!activePersona) throw new Error("PERSONA_MISSING");
   const persona = personaFromRow(draft.blog, activePersona);
-  const preamble = personaPreamble(persona);
+  const preamble = await buildSystemPreamble(persona);
 
   const res = await llm({
     system: preamble,
