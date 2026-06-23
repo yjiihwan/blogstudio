@@ -22,7 +22,7 @@ const nextConfig: NextConfig = {
     // 서버 액션 기본 본문 제한 1MB → 반자동 '직접 첨부' 사진 업로드 수용 위해 상향.
     // (사진 여러 장 첨부 시 1MB 초과로 "Body exceeded 1 MB limit" 500이 났었음.)
     serverActions: {
-      bodySizeLimit: "30mb",
+      bodySizeLimit: "50mb",
     },
   },
   allowedDevOrigins: [

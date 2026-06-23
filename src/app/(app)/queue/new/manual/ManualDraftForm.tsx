@@ -131,6 +131,9 @@ export function ManualDraftForm({
                 JPG·PNG·HEIC·WebP, 장당 최대 10MB. 올린 순서대로 본문에 배치됩니다. (없이 생성도 가능)
               </p>
             )}
+            <p className="mt-1 text-[11px] text-ink-400">
+              ※ 첨부 사진은 <strong>합쳐서 최대 50MB</strong>까지 가능합니다. 초과 시 사진 수를 줄여주세요.
+            </p>
           </div>
         )}
       </div>
