@@ -595,7 +595,20 @@ export async function reviseDraftWithFeedback(opts: {
     draft.blog.personas.find((p) => p.isActive) ?? draft.blog.personas[0];
   if (!activePersona) throw new Error("PERSONA_MISSING");
   const persona = personaFromRow(draft.blog, activePersona);
-  const preamble = await buildSystemPreamble(persona);
+  const basePreamble = await buildSystemPreamble(persona);
+  /* 재작성 경로에선 시스템 프리앰블 끝에 '관리자 검수 우선' 규칙을 덧붙인다.
+     WHY: 페르소나 격식("해요체 중심, 습니다체와 섞지 말 것")이 시스템 프롬프트라,
+     user 메시지의 톤 변경 요청보다 강하게 작동해 본문 톤이 안 바뀌는 현상이 있었다(제목만 바뀜).
+     관리자는 이 글에 대한 사람 검수자이므로, 충돌 시 관리자 코멘트가 페르소나 기본값을 이긴다. */
+  const reviewerAuthority = [
+    `## ⚠️ 관리자 검수 우선 규칙 (이 재작성 작업에 한해 위 페르소나 기본값보다 우선)`,
+    `이 글은 관리자가 반려한 글을 다시 쓰는 작업입니다. 사용자 메시지에 담긴 관리자 코멘트가`,
+    `위 페르소나의 기본 **격식·말투·시점·길이** 설정과 충돌하면, **반드시 관리자 코멘트를 따르세요.**`,
+    `예: 페르소나 격식이 '해요체'여도 관리자가 '반말로'라고 하면, 제목뿐 아니라 본문의 모든 문장`,
+    `종결어미를 실제 반말(~다/~어/~야/~지)로 끝까지 바꿉니다 — 위의 '해요체 중심' 규칙은 이 경우 무시합니다.`,
+    `단, **금지어와 사실·안전 규칙만은** 관리자 코멘트와 무관하게 예외 없이 유지합니다.`,
+  ].join("\n");
+  const preamble = `${basePreamble}\n\n${reviewerAuthority}`;
 
   /* 누적 반려 이력 — 과거 회차 반려 의도를 표준 제약으로 유지해야 직전 톤/스타일 회귀를 막는다.
      이번 회차 reject는 아래 line에서 사후 삽입되므로, 여기서 조회되는 건 과거 회차뿐이다. */
