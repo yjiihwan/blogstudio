@@ -24,6 +24,9 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: "100mb",
     },
+    // 프록시(구 middleware) 본문 한도(기본 10MB)도 함께 상향 — 안 하면 큰 업로드가
+    // 10MB에서 잘려 "Unexpected end of form"으로 실패한다.
+    proxyClientMaxBodySize: "100mb",
   },
   allowedDevOrigins: [
     "*.trycloudflare.com",
