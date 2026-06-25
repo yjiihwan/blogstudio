@@ -15,6 +15,7 @@ import {
   Save,
   ChevronDown,
   Download,
+  Loader2,
 } from "lucide-react";
 import { renderMarkdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
@@ -68,6 +69,7 @@ export function DraftReview(p: ReviewProps) {
   const [tags, setTags] = useState<Set<string>>(new Set());
   const [feedback, setFeedback] = useState("");
   const [pending, startTransition] = useTransition();
+  const [reviseLoading, setReviseLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -108,10 +110,15 @@ export function DraftReview(p: ReviewProps) {
     fd.set("feedback", feedback);
     Array.from(tags).forEach((t) => fd.append("feedbackTags", t));
     setActionError(null);
+    setReviseLoading(true);
     startTransition(async () => {
-      const result = await p.rejectAndRevise(fd);
-      if (result && "error" in result) {
-        setActionError(result.error);
+      try {
+        const result = await p.rejectAndRevise(fd);
+        if (result && "error" in result) {
+          setActionError(result.error);
+        }
+      } finally {
+        setReviseLoading(false);
       }
     });
   }
@@ -400,9 +407,23 @@ export function DraftReview(p: ReviewProps) {
                       size="md"
                       className="w-full"
                     >
-                      <Sparkles className="size-4" />
-                      피드백 보내고 다시 쓰기
+                      {reviseLoading ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin" />
+                          재작성 중… (약 10~20초)
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="size-4" />
+                          피드백 보내고 다시 쓰기
+                        </>
+                      )}
                     </Button>
+                    {reviseLoading && (
+                      <p className="text-xs text-ink-500 text-center mt-1">
+                        AI가 피드백을 반영해 다시 쓰는 중이에요. 잠시만요…
+                      </p>
+                    )}
                   </div>
                 )}
               </>

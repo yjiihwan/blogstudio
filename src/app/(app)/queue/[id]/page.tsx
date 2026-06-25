@@ -116,6 +116,7 @@ export default async function DraftDetailPage({
       </header>
 
       <DraftReview
+        key={`${draft.id}:${draft.revisionRound}`}
         draftId={draft.id}
         initialTitle={draft.title}
         initialBody={draft.bodyMd}
