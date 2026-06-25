@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ChipsInput } from "@/components/ui/chips-input";
 import { Sparkles, Info } from "lucide-react";
 import { SchedulePicker } from "@/components/ui/schedule-picker";
+import { AGE_GROUP_OPTIONS } from "@/lib/age-style";
 
 export type PersonaEditorValues = {
   purpose: string;
@@ -15,6 +16,7 @@ export type PersonaEditorValues = {
   brandVoice: string;
   pointOfView: "first_person" | "third_person" | "expert";
   formality: "informal" | "neutral" | "formal";
+  ageGroup: string | null;
   focusKeywords: string[];
   forbiddenWords: string[];
   ctas: string[];
@@ -51,6 +53,7 @@ export function PersonaEditor({
 }) {
   const [pov, setPov] = useState(persona.pointOfView);
   const [formality, setFormality] = useState(persona.formality);
+  const [ageGroup, setAgeGroup] = useState(persona.ageGroup ?? "");
 
   return (
     <form action={action} className="space-y-5 max-w-3xl">
@@ -181,6 +184,26 @@ export function PersonaEditor({
             />
             <input type="hidden" name="formality" value={formality} />
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="ageGroup">글쓴이 나이대</Label>
+          <Select
+            id="ageGroup"
+            name="ageGroup"
+            value={ageGroup}
+            onChange={(e) => setAgeGroup(e.target.value)}
+          >
+            <option value="">미설정 (기본 톤)</option>
+            {AGE_GROUP_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+          <Hint>
+            선택한 나이대의 일반적인 말투·어휘·문장 호흡으로 글을 씁니다(예: 20대=트렌디한 SNS 후기 톤, 50대=차근차근 정중한 톤).
+          </Hint>
         </div>
       </Section>
 

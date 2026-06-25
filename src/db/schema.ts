@@ -94,6 +94,9 @@ export const personas = sqliteTable("personas", {
   formality: text("formality", {
     enum: ["informal", "neutral", "formal"],
   }).notNull().default("neutral"),
+  ageGroup: text("age_group", {
+    enum: ["teens", "20s", "30s", "40s", "50s", "60s"],
+  }),
 
   /* === Content strategy === */
   coreTopicsJson: text("core_topics_json").notNull().default("[]"),       // [{topic, weight}]

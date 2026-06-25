@@ -34,6 +34,9 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
   blogs: [
     { name: "owner_id", ddl: "`owner_id` text REFERENCES `users`(`id`)" },
   ],
+  personas: [
+    { name: "age_group", ddl: "`age_group` text" },
+  ],
 };
 
 type MinimalSqlite = {

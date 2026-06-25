@@ -2,6 +2,7 @@
  * Prompt templates. Kept in one file so they're easy to tune as we observe
  * which patterns Naver's algorithm rewards / punishes.
  */
+import { ageStyleBlock } from "../age-style";
 
 export type PersonaInput = {
   blogName: string;
@@ -11,6 +12,7 @@ export type PersonaInput = {
   brandVoice: string;
   pointOfView: "first_person" | "third_person" | "expert";
   formality: "informal" | "neutral" | "formal";
+  ageGroup?: string | null;
   focusKeywords: string[];
   forbiddenWords: string[];
   ctas: string[];
@@ -54,6 +56,7 @@ export function personaPreamble(p: PersonaInput) {
     `**톤·말투**: ${p.brandVoice || "(미정)"}`,
     `**화법**: ${povLabel}`,
     `**격식**: ${formalityLabel}`,
+    ageStyleBlock(p.ageGroup),
     p.focusKeywords.length
       ? `**핵심 키워드**: ${p.focusKeywords.join(", ")}`
       : null,
