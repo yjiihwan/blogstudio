@@ -32,6 +32,8 @@ async function humanizeBody(opts: {
   preamble: string;
   callerUserId?: string;
   model: string;
+  brandName?: string;
+  primaryKeyword?: string;
 }): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
   const zero = { bodyMd: opts.bodyMd, inTokens: 0, outTokens: 0, costCents: 0 };
   if (opts.model === "mock") return zero;
@@ -44,7 +46,13 @@ async function humanizeBody(opts: {
       messages: [
         {
           role: "user",
-          content: humanizePrompt({ title: opts.title, bodyMd: opts.bodyMd, rules: guide.text }),
+          content: humanizePrompt({
+            title: opts.title,
+            bodyMd: opts.bodyMd,
+            rules: guide.text,
+            brandName: opts.brandName,
+            primaryKeyword: opts.primaryKeyword,
+          }),
         },
       ],
     });
@@ -271,6 +279,8 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
     preamble,
     callerUserId,
     model: bodyRes.model,
+    brandName: persona.blogName,
+    primaryKeyword: topicRow!.primaryKeyword,
   });
   const bodyMd = hum.bodyMd;
 
@@ -467,6 +477,8 @@ export async function generateDraftFromBrief(opts: {
     preamble,
     callerUserId: opts.callerUserId,
     model: bodyRes.model,
+    brandName: persona.blogName,
+    primaryKeyword,
   });
   const bodyMd = hum.bodyMd;
 
@@ -612,6 +624,8 @@ export async function reviseDraftWithFeedback(opts: {
     preamble,
     callerUserId: opts.callerUserId,
     model: res.model,
+    brandName: persona.blogName,
+    primaryKeyword: persona.focusKeywords[0],
   });
   parsed.bodyMd = hum.bodyMd;
 

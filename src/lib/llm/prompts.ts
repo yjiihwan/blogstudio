@@ -184,18 +184,20 @@ export function bodyPrompt(opts: {
     hasBrief ? "```" : null,
     hasBrief ? `` : null,
     `반드시 지킬 규칙:`,
-    `1. 네이버 블로그 알고리즘 친화적 — 첫 1~2문단에 메인 키워드 자연스럽게 등장`,
-    `2. 본문 ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
-    `3. H2 2~4개, 필요시 H3 사용. 짧고 검색에 노출되는 표현으로`,
-    `4. 이미지 위치는 본문에 \`<!-- IMG:slot=0 -->\` 형식으로 표시 (slot은 아웃라인 imagePlan의 slot 번호)`,
-    `5. 사람이 쓴 것처럼 자연스럽게 — 같은 문장 구조 반복 회피, 문단 길이 변화`,
-    `6. 광고티 나는 표현 회피, 페르소나의 "금지어"는 절대 사용 안 함`,
-    `7. 가격·정보는 "방문 시 기준" 같은 표현으로 변동 가능성 표시`,
-    `8. 마지막에 CTA 1개 (페르소나의 CTA 목록 중 1개 자연스럽게 포함)`,
-    `9. Markdown으로 응답. 제목(#)은 작성하지 말고 H2(##)부터 시작.`,
+    `1. **글의 주체(업체)는 실제 상호 "${opts.persona.blogName}"로 부른다.** "${opts.topic.primaryKeyword}에서는~"처럼 키워드를 상호(업체 이름) 대신 쓰지 마라.`,
+    `2. **그러면서도 메인 키워드 "${opts.topic.primaryKeyword}"를 정확히 그대로 2~3회 반드시 포함한다**(검색 노출 필수 — 0회 금지, 4회 이상 남발도 금지). 상호 대신이 아니라 "검색하는 사람의 표현"으로 문맥에 녹여라. 좋은 예: "${opts.topic.primaryKeyword}을(를) 알아보고 있다면", "${opts.topic.primaryKeyword} 중에서도 ~", "${opts.topic.primaryKeyword}을(를) 고민 중이라면 ${opts.persona.blogName}". 나쁜 예: 업체를 계속 "${opts.topic.primaryKeyword}"라고 부르기.`,
+    `3. 본문 ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
+    `4. H2 2~4개, 필요시 H3 사용. 짧고 검색에 노출되는 표현으로`,
+    `5. 이미지 위치는 본문에 \`<!-- IMG:slot=0 -->\` 형식으로 표시 (slot은 아웃라인 imagePlan의 slot 번호)`,
+    `6. 사람이 쓴 것처럼 자연스럽게 — 같은 문장 구조 반복 회피, 문단 길이 변화`,
+    `7. 광고티 나는 표현 회피, 페르소나의 "금지어"는 절대 사용 안 함`,
+    `8. 가격·정보는 "방문 시 기준" 같은 표현으로 변동 가능성 표시`,
+    `9. 마지막에 CTA 1개 (페르소나의 CTA 목록 중 1개 자연스럽게 포함)`,
+    `10. Markdown으로 응답. 제목(#)은 작성하지 말고 H2(##)부터 시작.`,
     ``,
+    `**상호(글의 주체)**: ${opts.persona.blogName}`,
     `**제목**: ${opts.topic.title}`,
-    `**메인 키워드**: ${opts.topic.primaryKeyword}`,
+    `**메인 키워드(검색 노출용 — 남발 금지, 2~3회)**: ${opts.topic.primaryKeyword}`,
     `**보조 키워드**: ${opts.topic.secondaryKeywords.join(", ")}`,
     ``,
     `**아웃라인 JSON**:`,
@@ -251,6 +253,10 @@ export function humanizePrompt(opts: {
   bodyMd: string;
   /** 전역 가이드 텍스트(AI 티 금지 규칙). */
   rules: string;
+  /** 글의 주체가 되는 실제 상호. */
+  brandName?: string;
+  /** 검색 노출용 메인 키워드(남발 교정 대상). */
+  primaryKeyword?: string;
 }) {
   return [
     `# 작업: 아래 블로그 초안에서 'AI가 쓴 티'를 전부 걷어내고, 진짜 사람이 직접 쓴 것처럼 다시 써라.`,
@@ -259,6 +265,16 @@ export function humanizePrompt(opts: {
     `## 반드시 제거할 AI 티 패턴 (하나도 남기지 마라)`,
     opts.rules.trim(),
     ``,
+    opts.brandName || opts.primaryKeyword
+      ? `## 상호 / 키워드 교정 (중요)`
+      : null,
+    opts.brandName
+      ? `- 업체/장소는 반드시 실제 상호 "${opts.brandName}"로 부른다. 검색 키워드를 상호처럼 쓴 부분(예: "${opts.primaryKeyword ?? ""}에서는~")은 실제 상호로 바로잡아라.`
+      : null,
+    opts.primaryKeyword
+      ? `- **메인 키워드 "${opts.primaryKeyword}"가 본문에 정확히 그대로 2~3회 들어가야 한다(검색 노출 필수).** 지금 부족하면(0~1회) 도입부와 중간에 "검색하는 사람의 표현"으로 자연스럽게 채워 넣어라 — 예: "${opts.primaryKeyword}을(를) 알아보고 있다면", "${opts.primaryKeyword} 중에서도 ~". 4회 이상이면 줄여라. 단 상호 대신 쓰진 말 것.`
+      : null,
+    opts.brandName || opts.primaryKeyword ? `` : null,
     `## 절대 바꾸지 말 것`,
     `- 사실·정보·수치·고유명사·가격·기간은 그대로 유지(없는 사실 지어내기 금지).`,
     `- 이미지 마커 \`<!-- IMG:slot=N -->\` 는 개수·위치 그대로 보존.`,
@@ -277,5 +293,7 @@ export function humanizePrompt(opts: {
     "```",
     ``,
     `다시 쓴 Markdown 본문만 출력. 해설·코드펜스 표시 없이.`,
-  ].join("\n");
+  ]
+    .filter((x) => x !== null)
+    .join("\n");
 }
