@@ -13,12 +13,57 @@ import {
   personaPreamble,
   type PersonaInput,
   revisePrompt,
+  humanizePrompt,
   topicResearchPrompt,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sendTelegramToUser } from "./telegram";
-import { globalGuideBlock } from "./global-guide";
+import { globalGuideBlock, getGlobalWritingGuide } from "./global-guide";
 import { saveImageBuffer } from "./storage";
+
+/**
+ * 본문 생성 후 'AI 티'를 걷어내는 사람화 리라이트 패스.
+ * 전역 가이드가 켜져 있을 때만 동작. 결과가 비정상(너무 짧거나 이미지 마커 유실)이면
+ * 원본을 유지한다. 토큰/비용 델타를 반환한다.
+ */
+async function humanizeBody(opts: {
+  bodyMd: string;
+  title: string;
+  preamble: string;
+  callerUserId?: string;
+  model: string;
+}): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
+  const zero = { bodyMd: opts.bodyMd, inTokens: 0, outTokens: 0, costCents: 0 };
+  if (opts.model === "mock") return zero;
+  const guide = await getGlobalWritingGuide();
+  if (!guide.enabled || !guide.text.trim()) return zero;
+  try {
+    const res = await llm({
+      system: opts.preamble,
+      callerUserId: opts.callerUserId,
+      messages: [
+        {
+          role: "user",
+          content: humanizePrompt({ title: opts.title, bodyMd: opts.bodyMd, rules: guide.text }),
+        },
+      ],
+    });
+    const out = res.text
+      .trim()
+      .replace(/^```(?:markdown)?/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    const origImgs = (opts.bodyMd.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
+    const newImgs = (out.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
+    // 안전장치: 결과가 절반 미만이거나 이미지 마커를 잃으면 원본 유지(토큰은 정산).
+    if (out.length < opts.bodyMd.length * 0.5 || newImgs < origImgs) {
+      return { bodyMd: opts.bodyMd, inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
+    }
+    return { bodyMd: out, inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
+  } catch {
+    return zero;
+  }
+}
 
 /**
  * 시스템 프롬프트 = 서비스 전체 공통 가이드(최우선) + 블로그 페르소나.
@@ -219,7 +264,15 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
       },
     ],
   });
-  const bodyMd = bodyRes.text.trim();
+  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 --- */
+  const hum = await humanizeBody({
+    bodyMd: bodyRes.text.trim(),
+    title: topicRow!.title,
+    preamble,
+    callerUserId,
+    model: bodyRes.model,
+  });
+  const bodyMd = hum.bodyMd;
 
   /* --- Step 4: score --- */
   const seo = scoreSeo({
@@ -237,11 +290,11 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
   });
 
   const totalInTokens =
-    topicRes.inputTokens + outlineRes.inputTokens + bodyRes.inputTokens;
+    topicRes.inputTokens + outlineRes.inputTokens + bodyRes.inputTokens + hum.inTokens;
   const totalOutTokens =
-    topicRes.outputTokens + outlineRes.outputTokens + bodyRes.outputTokens;
+    topicRes.outputTokens + outlineRes.outputTokens + bodyRes.outputTokens + hum.outTokens;
   const totalCostCents =
-    topicRes.costCents + outlineRes.costCents + bodyRes.costCents;
+    topicRes.costCents + outlineRes.costCents + bodyRes.costCents + hum.costCents;
 
   /* --- Step 5: persist draft --- */
   const [draft] = await db
@@ -407,7 +460,15 @@ export async function generateDraftFromBrief(opts: {
       },
     ],
   });
-  const bodyMd = bodyRes.text.trim();
+  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 --- */
+  const hum = await humanizeBody({
+    bodyMd: bodyRes.text.trim(),
+    title,
+    preamble,
+    callerUserId: opts.callerUserId,
+    model: bodyRes.model,
+  });
+  const bodyMd = hum.bodyMd;
 
   /* --- Step 4: score --- */
   const seo = scoreSeo({
@@ -421,9 +482,9 @@ export async function generateDraftFromBrief(opts: {
   });
   const human = scoreHuman({ bodyMd, forbiddenWords: persona.forbiddenWords });
 
-  const totalInTokens = outlineRes.inputTokens + bodyRes.inputTokens;
-  const totalOutTokens = outlineRes.outputTokens + bodyRes.outputTokens;
-  const totalCostCents = outlineRes.costCents + bodyRes.costCents;
+  const totalInTokens = outlineRes.inputTokens + bodyRes.inputTokens + hum.inTokens;
+  const totalOutTokens = outlineRes.outputTokens + bodyRes.outputTokens + hum.outTokens;
+  const totalCostCents = outlineRes.costCents + bodyRes.costCents + hum.costCents;
 
   /* --- Step 5: persist draft --- */
   const [draft] = await db
@@ -543,6 +604,16 @@ export async function reviseDraftWithFeedback(opts: {
       title: draft.title,
       bodyMd: res.text,
     };
+
+  /* 재작성 결과도 AI 티 제거(사람화) 패스 적용 */
+  const hum = await humanizeBody({
+    bodyMd: parsed.bodyMd,
+    title: parsed.title,
+    preamble,
+    callerUserId: opts.callerUserId,
+    model: res.model,
+  });
+  parsed.bodyMd = hum.bodyMd;
 
   const nextRev = draft.revisionRound + 1;
   const seo = scoreSeo({
