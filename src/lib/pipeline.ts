@@ -597,6 +597,23 @@ export async function reviseDraftWithFeedback(opts: {
   const persona = personaFromRow(draft.blog, activePersona);
   const preamble = await buildSystemPreamble(persona);
 
+  /* 누적 반려 이력 — 과거 회차 반려 의도를 표준 제약으로 유지해야 직전 톤/스타일 회귀를 막는다.
+     이번 회차 reject는 아래 line에서 사후 삽입되므로, 여기서 조회되는 건 과거 회차뿐이다. */
+  const priorRejects = await db.query.approvals.findMany({
+    where: and(
+      eq(schema.approvals.draftId, draft.id),
+      eq(schema.approvals.decision, "reject")
+    ),
+    orderBy: (a, { asc }) => [asc(a.revision)],
+  });
+  const priorFeedbacks = priorRejects
+    .filter((r) => (r.feedback ?? "").trim().length > 0)
+    .map((r) => ({
+      revision: r.revision,
+      feedback: r.feedback ?? "",
+      feedbackTags: safeJson<string[]>(r.feedbackTagsJson) ?? [],
+    }));
+
   const res = await llm({
     system: preamble,
     callerUserId: opts.callerUserId,
@@ -609,6 +626,7 @@ export async function reviseDraftWithFeedback(opts: {
           currentBodyMd: draft.bodyMd,
           feedback: opts.feedback,
           feedbackTags: opts.feedbackTags,
+          priorFeedbacks,
         }),
       },
     ],

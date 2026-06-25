@@ -232,12 +232,27 @@ export function revisePrompt(opts: {
   currentBodyMd: string;
   feedback: string;
   feedbackTags: string[];
+  /** 과거 회차의 반려 코멘트(오름차순) — 이번 수정 후에도 모두 유지해야 한다. */
+  priorFeedbacks?: { revision: number; feedback: string; feedbackTags: string[] }[];
 }) {
+  const priors = opts.priorFeedbacks ?? [];
+  const priorBlock =
+    priors.length > 0
+      ? [
+          `**누적 반려 반영사항 (이번 수정 후에도 전부 그대로 유지 — 표준 제약)**:`,
+          ...priors.map((p) => {
+            const tags = p.feedbackTags.join(", ");
+            return `- ${p.revision + 1}차 반려${tags ? ` [${tags}]` : ""}: ${p.feedback}`;
+          }),
+          ``,
+        ]
+      : [];
   return [
     `# 작업: 관리자의 반려 사유를 반영해 글을 다시 다듬어주세요.`,
     ``,
-    `**반려 태그**: ${opts.feedbackTags.join(", ") || "(없음)"}`,
-    `**관리자 코멘트**:`,
+    ...priorBlock,
+    `**이번 반려 태그**: ${opts.feedbackTags.join(", ") || "(없음)"}`,
+    `**이번 관리자 코멘트**:`,
     "```",
     opts.feedback,
     "```",
@@ -248,7 +263,9 @@ export function revisePrompt(opts: {
     opts.currentBodyMd,
     "```",
     ``,
-    `규칙: 코멘트의 의도에 맞춰 글을 다시 쓰세요. 페르소나·금지어·길이 규칙은 그대로 지킵니다.`,
+    priors.length > 0
+      ? `규칙: **위 '누적 반려 반영사항'(톤·스타일·길이 등)을 그대로 유지한 채, 이번 코멘트만 추가로 적용**하세요. 과거 반영분을 되돌리지 마세요 — 예컨대 이전에 '여성스러운 톤'으로 바꿨다면 이번에 분량을 늘리더라도 그 톤을 유지합니다. 페르소나·금지어·길이 규칙도 그대로 지킵니다.`
+      : `규칙: 코멘트의 의도에 맞춰 글을 다시 쓰세요. 페르소나·금지어·길이 규칙은 그대로 지킵니다.`,
     `응답 형식 (JSON):`,
     "```json",
     `{ "title": "수정된 제목", "bodyMd": "수정된 본문 Markdown" }`,
