@@ -115,6 +115,7 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
     pointOfView: p.pointOfView,
     formality: p.formality,
     ageGroup: p.ageGroup,
+    gender: p.gender,
     focusKeywords: JSON.parse(p.focusKeywordsJson || "[]"),
     forbiddenWords: JSON.parse(p.forbiddenWordsJson || "[]"),
     ctas: JSON.parse(p.callsToActionJson || "[]"),

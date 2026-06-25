@@ -43,6 +43,10 @@ function readPayload(formData: FormData) {
           ? (v as "teens" | "20s" | "30s" | "40s" | "50s" | "60s")
           : null;
       })(),
+      gender: (() => {
+        const v = String(formData.get("gender") ?? "").trim();
+        return v === "female" || v === "male" ? (v as "female" | "male") : null;
+      })(),
       focusKeywords: formData.getAll("focusKeywords").map(String).filter(Boolean),
       forbiddenWords: formData
         .getAll("forbiddenWords")
@@ -90,6 +94,7 @@ export async function createBlogAction(formData: FormData) {
     pointOfView: persona.pointOfView,
     formality: persona.formality,
     ageGroup: persona.ageGroup,
+    gender: persona.gender,
     coreTopicsJson: "[]",
     focusKeywordsJson: JSON.stringify(persona.focusKeywords),
     forbiddenWordsJson: JSON.stringify(persona.forbiddenWords),
@@ -140,6 +145,7 @@ export async function updateBlogAction(formData: FormData) {
     pointOfView: persona.pointOfView,
     formality: persona.formality,
     ageGroup: persona.ageGroup,
+    gender: persona.gender,
     focusKeywordsJson: JSON.stringify(persona.focusKeywords),
     forbiddenWordsJson: JSON.stringify(persona.forbiddenWords),
     callsToActionJson: JSON.stringify(persona.ctas),

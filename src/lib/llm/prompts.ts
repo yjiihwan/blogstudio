@@ -3,6 +3,7 @@
  * which patterns Naver's algorithm rewards / punishes.
  */
 import { ageStyleBlock } from "../age-style";
+import { genderStyleBlock } from "../gender-style";
 
 export type PersonaInput = {
   blogName: string;
@@ -13,6 +14,7 @@ export type PersonaInput = {
   pointOfView: "first_person" | "third_person" | "expert";
   formality: "informal" | "neutral" | "formal";
   ageGroup?: string | null;
+  gender?: string | null;
   focusKeywords: string[];
   forbiddenWords: string[];
   ctas: string[];
@@ -57,6 +59,7 @@ export function personaPreamble(p: PersonaInput) {
     `**화법**: ${povLabel}`,
     `**격식**: ${formalityLabel}`,
     ageStyleBlock(p.ageGroup),
+    genderStyleBlock(p.gender),
     p.focusKeywords.length
       ? `**핵심 키워드**: ${p.focusKeywords.join(", ")}`
       : null,

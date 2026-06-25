@@ -60,6 +60,7 @@ export default async function NewBlogPage({
           pointOfView: "first_person",
           formality: "neutral",
           ageGroup: null,
+          gender: null,
           focusKeywords: [],
           forbiddenWords: ["최고", "최저가", "100%", "무조건"],
           ctas: [],

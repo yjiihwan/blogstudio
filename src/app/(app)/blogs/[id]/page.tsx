@@ -95,6 +95,7 @@ export default async function BlogEditPage({
           pointOfView: persona?.pointOfView ?? "first_person",
           formality: persona?.formality ?? "neutral",
           ageGroup: persona?.ageGroup ?? null,
+          gender: persona?.gender ?? null,
           focusKeywords: persona ? JSON.parse(persona.focusKeywordsJson) : [],
           forbiddenWords: persona ? JSON.parse(persona.forbiddenWordsJson) : [],
           ctas: persona ? JSON.parse(persona.callsToActionJson) : [],

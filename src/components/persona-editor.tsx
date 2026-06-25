@@ -9,6 +9,7 @@ import { ChipsInput } from "@/components/ui/chips-input";
 import { Sparkles, Info } from "lucide-react";
 import { SchedulePicker } from "@/components/ui/schedule-picker";
 import { AGE_GROUP_OPTIONS } from "@/lib/age-style";
+import { GENDER_OPTIONS } from "@/lib/gender-style";
 
 export type PersonaEditorValues = {
   purpose: string;
@@ -17,6 +18,7 @@ export type PersonaEditorValues = {
   pointOfView: "first_person" | "third_person" | "expert";
   formality: "informal" | "neutral" | "formal";
   ageGroup: string | null;
+  gender: string | null;
   focusKeywords: string[];
   forbiddenWords: string[];
   ctas: string[];
@@ -54,6 +56,7 @@ export function PersonaEditor({
   const [pov, setPov] = useState(persona.pointOfView);
   const [formality, setFormality] = useState(persona.formality);
   const [ageGroup, setAgeGroup] = useState(persona.ageGroup ?? "");
+  const [gender, setGender] = useState(persona.gender ?? "");
 
   return (
     <form action={action} className="space-y-5 max-w-3xl">
@@ -186,25 +189,43 @@ export function PersonaEditor({
           </div>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="ageGroup">글쓴이 나이대</Label>
-          <Select
-            id="ageGroup"
-            name="ageGroup"
-            value={ageGroup}
-            onChange={(e) => setAgeGroup(e.target.value)}
-          >
-            <option value="">미설정 (기본 톤)</option>
-            {AGE_GROUP_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-          <Hint>
-            선택한 나이대의 일반적인 말투·어휘·문장 호흡으로 글을 씁니다(예: 20대=트렌디한 SNS 후기 톤, 50대=차근차근 정중한 톤).
-          </Hint>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="ageGroup">글쓴이 나이대</Label>
+            <Select
+              id="ageGroup"
+              name="ageGroup"
+              value={ageGroup}
+              onChange={(e) => setAgeGroup(e.target.value)}
+            >
+              <option value="">미설정 (기본 톤)</option>
+              {AGE_GROUP_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="gender">글쓴이 성별</Label>
+            <Select
+              id="gender"
+              name="gender"
+              value={gender}
+              onChange={(e) => setGender(e.target.value)}
+            >
+              <option value="">미설정 (기본 톤)</option>
+              {GENDER_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </div>
         </div>
+        <Hint>
+          나이대·성별의 일반적인 말투·스타일로 글을 씁니다(예: 20대 여성=감성적인 트렌디 후기 톤). 미설정이면 기본 톤. 톤/말투 설정으로 세부 조정됩니다.
+        </Hint>
       </Section>
 
       {/* ============== KEYWORDS ============== */}
