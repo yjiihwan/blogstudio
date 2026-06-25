@@ -226,6 +226,49 @@ export function bodyPrompt(opts: {
 }
 
 /** Step 4: revise on rejection feedback. */
+/**
+ * 관리자 코멘트에서 '분량/글자수 변경' 의도를 정량 목표로 환산한다.
+ * WHY: "늘려줘/줄여줘"는 정성적이라 LLM이 막연히 해석해 거의 안 바뀐다(특히 누적 회차).
+ * 현재 글자수 대비 구체적 목표치를 만들어 프롬프트에 박아야 실제로 반영된다.
+ * 기준은 scoring.ts와 동일하게 '공백 제외' 글자수.
+ */
+export function parseLengthIntent(
+  feedback: string,
+  currentChars: number,
+  preferredMin: number,
+  preferredMax: number
+): { direction: "up" | "down"; targetChars: number } | null {
+  const f = feedback.replace(/\s+/g, " ");
+  const upWords =
+    /(늘려|늘리|늘여|길게|길어|길|풍부|자세히|자세하게|디테일|대폭|확장|보강|덧붙|더 (?:길|많|풍부|자세))/;
+  const downWords = /(줄여|줄이|짧게|짧아|짧|간결|핵심만|절반|반으로|덜어|압축|간략|축소|쳐내)/;
+  const charMatch = f.match(/(\d{2,5})\s*자/);
+  const multMatch = f.match(/(\d+(?:\.\d+)?)\s*배/);
+  const half = /절반|반으로/.test(f);
+  const hasUp = upWords.test(f);
+  const hasDown = downWords.test(f);
+
+  let direction: "up" | "down" | null = null;
+  if (charMatch) direction = parseInt(charMatch[1], 10) >= currentChars ? "up" : "down";
+  else if (half) direction = "down";
+  else if (multMatch) direction = parseFloat(multMatch[1]) >= 1 ? "up" : "down";
+  else if (hasUp && !hasDown) direction = "up";
+  else if (hasDown && !hasUp) direction = "down";
+  if (!direction) return null;
+
+  let target: number;
+  if (charMatch) target = parseInt(charMatch[1], 10);
+  else if (half) target = Math.round(currentChars * 0.5);
+  else if (multMatch && direction === "up") target = Math.round(currentChars * parseFloat(multMatch[1]));
+  else if (direction === "up") target = Math.max(Math.round(currentChars * 1.6), preferredMin || 0);
+  else target = Math.round(currentChars * 0.55);
+
+  // 합리적 범위로 클램프(페르소나 상한의 1.25배까지 허용, 하한 80자)
+  const ceil = Math.max(preferredMax || 0, Math.round(currentChars * 2.5));
+  target = Math.min(Math.max(target, 80), ceil || target);
+  return { direction, targetChars: target };
+}
+
 export function revisePrompt(opts: {
   persona: PersonaInput;
   currentTitle: string;
@@ -236,6 +279,25 @@ export function revisePrompt(opts: {
   priorFeedbacks?: { revision: number; feedback: string; feedbackTags: string[] }[];
 }) {
   const priors = opts.priorFeedbacks ?? [];
+  const currentChars = opts.currentBodyMd.replace(/\s+/g, "").length;
+  const lenIntent = parseLengthIntent(
+    opts.feedback,
+    currentChars,
+    opts.persona.preferredLengthMin,
+    opts.persona.preferredLengthMax
+  );
+  const lengthBlock = lenIntent
+    ? [
+        `**길이 목표 (정량 — 반드시 충족)**: 현재 본문은 공백 제외 약 ${currentChars}자입니다. 이번 코멘트는 분량을 ${
+          lenIntent.direction === "up" ? "늘리라는" : "줄이라는"
+        } 요청이므로, 다시 쓴 본문을 **공백 제외 약 ${lenIntent.targetChars}자(±10%)**로 맞추세요. ${
+          lenIntent.direction === "up"
+            ? "실제로 길이를 늘리되 같은 말 반복·군더더기로 채우지 말고, 새로운 구체 정보·사례·디테일을 더해 자연스럽게 늘리세요."
+            : "핵심·사실은 보존한 채 중복과 군더더기를 덜어내 목표 길이로 압축하세요."
+        } 목표 글자수에 크게 못 미치면(또는 크게 넘기면) 미반영으로 간주합니다.`,
+        ``,
+      ]
+    : [];
   const priorBlock =
     priors.length > 0
       ? [
@@ -251,6 +313,7 @@ export function revisePrompt(opts: {
     `# 작업: 관리자의 반려 사유를 반영해 글을 다시 다듬어주세요.`,
     ``,
     ...priorBlock,
+    ...lengthBlock,
     `**이번 반려 태그**: ${opts.feedbackTags.join(", ") || "(없음)"}`,
     `**이번 관리자 코멘트**:`,
     "```",
@@ -272,6 +335,9 @@ export function revisePrompt(opts: {
     priors.length > 0
       ? `규칙: **위 '누적 반려 반영사항'(톤·스타일·길이 등)을 그대로 유지한 채, 이번 코멘트를 추가로 적용**하세요. 과거 반영분을 되돌리지 마세요 — 예컨대 이전에 '여성스러운 톤'으로 바꿨다면 이번에 분량을 늘리더라도 그 톤을 유지합니다. 페르소나의 길이·세부 규칙은 **관리자 코멘트와 충돌하지 않는 범위에서만** 적용하고, 금지어는 반드시 지킵니다.`
       : `규칙: 코멘트의 의도에 맞춰 글을 다시 쓰세요. 페르소나 규칙은 **관리자 코멘트와 충돌하지 않는 범위에서만** 적용하고, 금지어는 반드시 지킵니다.`,
+    // WHY: 누적 회차일수록 LLM이 '요청 부분만 끼워넣고' 나머지를 기계적으로 깁는 경향(같은 종결어미
+    // 반복·짜깁기)이 생긴다. 매 회차 글 전체를 다시 다듬으라고 명시해 완성도 저하를 막는다.
+    `**글 전체 완성도 — 기계적 패치 금지**: 요청한 부분만 끼워 넣고 나머지를 그대로 두지 마세요. 요청을 반영한 뒤 **글 전체의 흐름·문장 연결·자연스러움을 처음부터 다시 다듬으세요.** 같은 종결어미(예: ~습니다, ~해요)를 3문장 넘게 연속하지 말고, 문장 길이를 짧고 길게 섞어 사람이 직접 쓴 글처럼 만드세요. 누적 반려가 쌓여도 글이 짜깁기처럼 읽히면 안 됩니다.`,
     `응답 형식 (JSON):`,
     "```json",
     `{ "title": "수정된 제목", "bodyMd": "수정된 본문 Markdown" }`,
@@ -294,6 +360,8 @@ export function humanizePrompt(opts: {
   brandName?: string;
   /** 검색 노출용 메인 키워드(남발 교정 대상). */
   primaryKeyword?: string;
+  /** 분량 늘리기 반려 직후 호출 시, 이 글자수(공백 제외) 미만으로 줄이지 못하게 한다. */
+  minChars?: number;
 }) {
   return [
     `# 작업: 아래 블로그 초안에서 'AI가 쓴 티'를 전부 걷어내고, 진짜 사람이 직접 쓴 것처럼 다시 써라.`,
@@ -315,7 +383,11 @@ export function humanizePrompt(opts: {
     `## 절대 바꾸지 말 것`,
     `- 사실·정보·수치·고유명사·가격·기간은 그대로 유지(없는 사실 지어내기 금지).`,
     `- 이미지 마커 \`<!-- IMG:slot=N -->\` 는 개수·위치 그대로 보존.`,
-    `- H2(##) 소제목 구조와 대략적 분량은 유지.`,
+    // WHY: 분량 늘리기 반려 직후엔 humanize의 '간결화'가 방금 늘린 분량을 도로 깎아 길이요청을
+    // 무력화한다(실측: revise 734자 → humanize 463자). 그 경우 축소를 명시적으로 금지한다.
+    opts.minChars
+      ? `- H2(##) 소제목 구조는 유지. **분량을 절대 줄이지 마라 — 공백 제외 ${opts.minChars}자 이상을 유지**한다. 이 글은 관리자 요청으로 길이를 맞춘 글이니, AI 티를 걷어내되 내용을 잘라내 분량을 줄이면 안 된다.`
+      : `- H2(##) 소제목 구조와 대략적 분량은 유지.`,
     // WHY: 이 패스는 '자연스럽게 다듬기'이지 '톤/시점 재설정'이 아니다. 현재 본문의 화자·시점·격식은
     // 상위 단계(생성 또는 관리자 반려 반영)에서 이미 의도적으로 맞춰진 것이므로, 페르소나 기본값으로
     // 되돌리면 안 된다. 안 그러면 '직원 시점으로' 바꾼 글을 humanize가 후기 톤으로 되돌리는 회귀가 생긴다.

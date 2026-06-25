@@ -15,6 +15,7 @@ import {
   revisePrompt,
   humanizePrompt,
   topicResearchPrompt,
+  parseLengthIntent,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sendTelegramToUser } from "./telegram";
@@ -34,6 +35,8 @@ async function humanizeBody(opts: {
   model: string;
   brandName?: string;
   primaryKeyword?: string;
+  /** 분량 늘리기 반려 직후 호출 시, 결과가 이 글자수(공백 제외) 미만이면 humanize를 버리고 입력을 유지한다. */
+  minChars?: number;
 }): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
   const zero = { bodyMd: opts.bodyMd, inTokens: 0, outTokens: 0, costCents: 0 };
   if (opts.model === "mock") return zero;
@@ -52,6 +55,7 @@ async function humanizeBody(opts: {
             rules: guide.text,
             brandName: opts.brandName,
             primaryKeyword: opts.primaryKeyword,
+            minChars: opts.minChars,
           }),
         },
       ],
@@ -64,7 +68,11 @@ async function humanizeBody(opts: {
     const origImgs = (opts.bodyMd.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
     const newImgs = (out.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
     // 안전장치: 결과가 절반 미만이거나 이미지 마커를 잃으면 원본 유지(토큰은 정산).
-    if (out.length < opts.bodyMd.length * 0.5 || newImgs < origImgs) {
+    // 분량 늘리기 반려(minChars)면 humanize가 길이를 깎는 걸 막기 위해 floor를 minChars의 95%로 올린다.
+    const outChars = out.replace(/\s+/g, "").length;
+    const floor = opts.minChars ? opts.minChars * 0.95 : opts.bodyMd.length * 0.5;
+    const measured = opts.minChars ? outChars : out.length;
+    if (measured < floor || newImgs < origImgs) {
       return { bodyMd: opts.bodyMd, inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
     }
     return { bodyMd: out, inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
@@ -654,7 +662,18 @@ export async function reviseDraftWithFeedback(opts: {
       bodyMd: res.text,
     };
 
-  /* 재작성 결과도 AI 티 제거(사람화) 패스 적용 */
+  /* 재작성 결과도 AI 티 제거(사람화) 패스 적용.
+     분량 늘리기 반려면 humanize가 길이를 깎지 못하도록 minChars(revise 결과의 95%)를 건다. */
+  const lenIntent = parseLengthIntent(
+    opts.feedback,
+    draft.bodyMd.replace(/\s+/g, "").length,
+    persona.preferredLengthMin,
+    persona.preferredLengthMax
+  );
+  const humMinChars =
+    lenIntent?.direction === "up"
+      ? Math.round(parsed.bodyMd.replace(/\s+/g, "").length * 0.95)
+      : undefined;
   const hum = await humanizeBody({
     bodyMd: parsed.bodyMd,
     title: parsed.title,
@@ -663,6 +682,7 @@ export async function reviseDraftWithFeedback(opts: {
     model: res.model,
     brandName: persona.blogName,
     primaryKeyword: persona.focusKeywords[0],
+    minChars: humMinChars,
   });
   parsed.bodyMd = hum.bodyMd;
 
