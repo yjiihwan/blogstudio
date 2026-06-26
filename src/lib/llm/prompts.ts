@@ -129,14 +129,19 @@ export function outlinePrompt(opts: {
   userBrief?: string;
   /** 반자동 + 직접 업로드: 정확히 이 개수의 이미지 슬롯(slot 0..N-1)을 둔다. */
   imageSlotCount?: number;
+  /** 사용자가 명시한 목표 글자수(공백 제외). 있으면 페르소나 기본 분량보다 우선한다. */
+  lengthTarget?: number;
 }) {
   const hasBrief = !!opts.userBrief?.trim();
   const fixedImages = typeof opts.imageSlotCount === "number";
+  const lt = opts.lengthTarget && opts.lengthTarget > 0 ? opts.lengthTarget : null;
   return [
     `# 작업: 아래 주제로 글 구조(아웃라인) 만들기`,
     ``,
     hasBrief
-      ? `⚠️ 이 글은 사용자가 주제와 내용을 **직접 지정**했습니다. 아래 "사용자 지정 내용"을 반드시 충실히 반영하세요. 다만 글의 말투·톤·금지어·길이·CTA 등 페르소나 규칙은 그대로 지킵니다(주제만 사용자 지정, 스타일은 페르소나).`
+      ? `⚠️ 이 글은 사용자가 주제와 내용을 **직접 지정**했습니다. 아래 "사용자 지정 내용"을 반드시 충실히 반영하세요. 다만 글의 말투·톤·금지어·CTA 등 페르소나 규칙은 그대로 지킵니다(주제만 사용자 지정, 스타일은 페르소나).${
+          lt ? ` **단, 글 길이는 사용자가 명시한 약 ${lt}자를 페르소나 기본 분량보다 우선합니다.**` : " 길이도 페르소나 규칙을 따릅니다."
+        }`
       : null,
     hasBrief ? `` : null,
     hasBrief ? `**사용자 지정 내용**:` : null,
@@ -151,7 +156,9 @@ export function outlinePrompt(opts: {
       ? `**보조 키워드**: ${opts.topic.secondaryKeywords.join(", ")}`
       : null,
     ``,
-    `목표 길이: ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
+    lt
+      ? `목표 길이: 공백 제외 약 ${lt}자(±10%) — 사용자 명시. 섹션 수와 각 섹션 분량을 이 목표에 맞춰 충분히 잡으세요(필요하면 H2 섹션을 더 늘려도 됩니다).`
+      : `목표 길이: ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
     fixedImages
       ? `이미지: 사용자가 사진 ${opts.imageSlotCount}장을 직접 업로드했습니다. imagePlan에 정확히 ${opts.imageSlotCount}개의 슬롯(slot 0부터 ${Math.max(0, (opts.imageSlotCount ?? 0) - 1)}까지)을 만들고, 본문 흐름에 맞는 위치를 배정하세요. needsUserShot 은 모두 false(이미 업로드됨).`
       : `목표 이미지 수: ${opts.persona.imagesPerPostMin}~${opts.persona.imagesPerPostMax}장`,
@@ -168,9 +175,13 @@ export function outlinePrompt(opts: {
     `  ]`,
     `}`,
     "```",
-    fixedImages
-      ? `JSON만 응답. 섹션은 3~5개. imagePlan은 정확히 ${opts.imageSlotCount}개.`
-      : `JSON만 응답. 섹션은 3~5개. 이미지는 페르소나 설정 범위 내.`,
+    (() => {
+      // 큰 목표 길이는 섹션 3~5개로는 못 채운다 → 목표×(섹션당 ~500자) 기준으로 권장 섹션 수를 올린다.
+      const secHint = lt && lt > 1600 ? `${Math.max(4, Math.round(lt / 500))}개 이상` : `3~5개`;
+      return fixedImages
+        ? `JSON만 응답. 섹션은 ${secHint}. imagePlan은 정확히 ${opts.imageSlotCount}개.`
+        : `JSON만 응답. 섹션은 ${secHint}. 이미지는 페르소나 설정 범위 내.`;
+    })(),
   ]
     .filter((x) => x !== null)
     .join("\n");
@@ -183,13 +194,19 @@ export function bodyPrompt(opts: {
   outline: unknown;
   /** 반자동 모드: 사용자가 직접 지정한 내용 디테일. 있으면 반드시 충실히 반영. */
   userBrief?: string;
+  /** 사용자가 명시한 목표 글자수(공백 제외). 있으면 페르소나 기본 분량보다 우선한다. */
+  lengthTarget?: number;
 }) {
   const hasBrief = !!opts.userBrief?.trim();
+  const lt = opts.lengthTarget && opts.lengthTarget > 0 ? opts.lengthTarget : null;
+  const bigTarget = lt && lt > (opts.persona.preferredLengthMax || 0) * 1.3;
   return [
     `# 작업: 아래 아웃라인을 바탕으로 본문 작성`,
     ``,
     hasBrief
-      ? `⚠️ 사용자가 주제·내용을 직접 지정한 글입니다. 아래 "사용자 지정 내용"을 반드시 충실히 반영하되, 말투·톤·금지어·길이·CTA 규칙은 페르소나 설정을 그대로 따르세요.`
+      ? `⚠️ 사용자가 주제·내용을 직접 지정한 글입니다. 아래 "사용자 지정 내용"을 반드시 충실히 반영하되, 말투·톤·금지어·CTA 규칙은 페르소나 설정을 그대로 따르세요.${
+          lt ? ` **단, 글 길이는 사용자가 명시한 약 ${lt}자(±10%)를 페르소나 기본 분량보다 우선합니다.**` : " 길이도 페르소나 설정을 따르세요."
+        }`
       : null,
     hasBrief ? `**사용자 지정 내용**:` : null,
     hasBrief ? "```" : null,
@@ -199,7 +216,12 @@ export function bodyPrompt(opts: {
     `반드시 지킬 규칙:`,
     `1. **글의 주체(업체)는 실제 상호 "${opts.persona.blogName}"로 부른다.** "${opts.topic.primaryKeyword}에서는~"처럼 키워드를 상호(업체 이름) 대신 쓰지 마라.`,
     `2. **그러면서도 메인 키워드 "${opts.topic.primaryKeyword}"를 정확히 그대로 2~3회 반드시 포함한다**(검색 노출 필수 — 0회 금지, 4회 이상 남발도 금지). 상호 대신이 아니라 "검색하는 사람의 표현"으로 문맥에 녹여라. 좋은 예: "${opts.topic.primaryKeyword}을(를) 알아보고 있다면", "${opts.topic.primaryKeyword} 중에서도 ~", "${opts.topic.primaryKeyword}을(를) 고민 중이라면 ${opts.persona.blogName}". 나쁜 예: 업체를 계속 "${opts.topic.primaryKeyword}"라고 부르기.`,
-    `3. 본문 ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
+    lt
+      ? `3. **본문 길이 (사용자 명시 — 반드시 충족, 페르소나 기본 분량보다 우선)**: 공백 제외 약 ${lt}자(±10%)로 작성하세요. 목표에 크게 못 미치면 미반영으로 간주합니다. 같은 말 반복·군더더기로 채우지 말고 구체 정보·사례·디테일을 더해 자연스럽게 채우세요.`
+      : `3. 본문 ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
+    bigTarget
+      ? `3-1. **분량 확보 (중요)**: 목표 ${lt}자는 짧은 글이 아닙니다. 아웃라인의 각 H2 섹션을 공백 제외 400~600자의 구체적 내용으로 충실히 채우고, 부족하면 섹션을 더 추가하세요(시설·장비 상세, 트레이너/프로그램, 이용 절차, 자주 묻는 질문, 위치·이용 팁, 실제 활용 시나리오 등으로 주제를 다양화). 페르소나의 기본 길이 상한은 이 글에 한해 무시합니다.`
+      : null,
     `4. H2 2~4개, 필요시 H3 사용. 짧고 검색에 노출되는 표현으로`,
     `5. 이미지 위치는 본문에 \`<!-- IMG:slot=0 -->\` 형식으로 표시 (slot은 아웃라인 imagePlan의 slot 번호)`,
     `6. 사람이 쓴 것처럼 자연스럽게 — 같은 문장 구조 반복 회피, 문단 길이 변화`,
@@ -263,10 +285,34 @@ export function parseLengthIntent(
   else if (direction === "up") target = Math.max(Math.round(currentChars * 1.6), preferredMin || 0);
   else target = Math.round(currentChars * 0.55);
 
-  // 합리적 범위로 클램프(페르소나 상한의 1.25배까지 허용, 하한 80자)
-  const ceil = Math.max(preferredMax || 0, Math.round(currentChars * 2.5));
-  target = Math.min(Math.max(target, 80), ceil || target);
+  // 합리적 범위로 클램프(하한 80자).
+  // WHY: 관리자가 "3000자로"처럼 명시 숫자를 주면 그 의도를 그대로 따라야 한다 —
+  // 페르소나 상한/현재×2.5로 깎으면 600→3000 요청이 2200으로 잘려 '미반영'으로 보인다(비대칭 버그).
+  // 모호/비율 요청만 과확장 방지를 위해 페르소나 기반 ceiling을 쓰고,
+  // 명시 숫자는 폭주 방지용 절대 상한(8000자)만 적용한다.
+  const ceil = charMatch
+    ? 8000
+    : Math.max(preferredMax || 0, Math.round(currentChars * 2.5)) || target;
+  target = Math.min(Math.max(target, 80), ceil);
   return { direction, targetChars: target };
+}
+
+/**
+ * 사용자 입력(브리프/제목)에서 '명시 글자수' 목표를 추출한다 — 신규 작성 경로용.
+ * WHY: 신규 글은 '현재 글자수'가 없어 parseLengthIntent를 쓸 수 없다. 또 신규 경로는 명시 길이를
+ * 파싱조차 안 하고 페르소나 기본 분량만 프롬프트에 박아, "2000자로 작성" 요청이 700자로 잘렸다.
+ * "2000자", "3천자", "2000자 내외/이상/정도"처럼 절대 숫자만 인식한다(모호한 '길게'는 페르소나 기본 사용).
+ * 페르소나 상한에 막히지 않도록 폭주 방지용 절대 상한(8000자)만 적용한다.
+ */
+export function parseExplicitLength(text: string): number | null {
+  const f = (text || "").replace(/\s+/g, " ");
+  const thousand = f.match(/(\d+(?:\.\d+)?)\s*천\s*자/); // "3천자" → 3000
+  const charMatch = f.match(/(\d{2,5})\s*자/); // "2000자"
+  let target: number | null = null;
+  if (thousand) target = Math.round(parseFloat(thousand[1]) * 1000);
+  else if (charMatch) target = parseInt(charMatch[1], 10);
+  if (target === null) return null;
+  return Math.min(8000, Math.max(80, target));
 }
 
 export function revisePrompt(opts: {
@@ -287,16 +333,25 @@ export function revisePrompt(opts: {
     opts.persona.preferredLengthMax
   );
   const lengthBlock = lenIntent
-    ? [
-        `**길이 목표 (정량 — 반드시 충족)**: 현재 본문은 공백 제외 약 ${currentChars}자입니다. 이번 코멘트는 분량을 ${
-          lenIntent.direction === "up" ? "늘리라는" : "줄이라는"
-        } 요청이므로, 다시 쓴 본문을 **공백 제외 약 ${lenIntent.targetChars}자(±10%)**로 맞추세요. ${
-          lenIntent.direction === "up"
-            ? "실제로 길이를 늘리되 같은 말 반복·군더더기로 채우지 말고, 새로운 구체 정보·사례·디테일을 더해 자연스럽게 늘리세요."
-            : "핵심·사실은 보존한 채 중복과 군더더기를 덜어내 목표 길이로 압축하세요."
-        } 목표 글자수에 크게 못 미치면(또는 크게 넘기면) 미반영으로 간주합니다.`,
-        ``,
-      ]
+    ? (() => {
+        const gap = lenIntent.targetChars - currentChars;
+        const bigUp = lenIntent.direction === "up" && gap >= 600;
+        // 큰 확장은 모델이 단일 패스로 잘 안 따른다 → 갭과 추가할 섹션 수를 구체적으로 지시한다.
+        const addSections = Math.max(2, Math.round(gap / 500));
+        return [
+          `**길이 목표 (정량 — 반드시 충족)**: 현재 본문은 공백 제외 약 ${currentChars}자입니다. 이번 코멘트는 분량을 ${
+            lenIntent.direction === "up" ? "늘리라는" : "줄이라는"
+          } 요청이므로, 다시 쓴 본문을 **공백 제외 약 ${lenIntent.targetChars}자(±10%)**로 맞추세요. ${
+            lenIntent.direction === "up"
+              ? "실제로 길이를 늘리되 같은 말 반복·군더더기로 채우지 말고, 새로운 구체 정보·사례·디테일을 더해 자연스럽게 늘리세요."
+              : "핵심·사실은 보존한 채 중복과 군더더기를 덜어내 목표 길이로 압축하세요."
+          } 목표 글자수에 크게 못 미치면(또는 크게 넘기면) 미반영으로 간주합니다.`,
+          bigUp
+            ? `**대폭 확장 지침 (중요)**: 지금보다 약 ${gap}자를 더 써야 합니다(현재 ${currentChars}자 → 목표 ${lenIntent.targetChars}자). 기존 문장만 약간 늘리는 정도로는 목표에 절대 도달하지 못합니다. 새로운 H2(##) 소제목 섹션을 **${addSections}개 이상** 추가하고, 각 섹션을 공백 제외 400~600자 분량의 구체적 내용으로 채우세요(예: 시설·장비 상세, 트레이너/프로그램 소개, 이용 절차, 자주 묻는 질문, 위치·이용 팁, 실제 활용 시나리오 등 주제를 다양화). 결과 본문이 목표 글자수에 도달했는지 쓰기 전에 점검하고, 부족하면 섹션을 더 추가해 반드시 목표를 채우세요. 페르소나의 기본 길이 상한은 이 관리자 요청에 한해 무시합니다.`
+            : null,
+          ``,
+        ].filter((x): x is string => x !== null);
+      })()
     : [];
   const priorBlock =
     priors.length > 0

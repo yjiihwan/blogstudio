@@ -16,6 +16,7 @@ import {
   humanizePrompt,
   topicResearchPrompt,
   parseLengthIntent,
+  parseExplicitLength,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sendTelegramToUser } from "./telegram";
@@ -37,6 +38,8 @@ async function humanizeBody(opts: {
   primaryKeyword?: string;
   /** 분량 늘리기 반려 직후 호출 시, 결과가 이 글자수(공백 제외) 미만이면 humanize를 버리고 입력을 유지한다. */
   minChars?: number;
+  /** 큰 본문은 기본 4096토큰에서 잘리므로 호출부가 천장을 올려 전달한다. */
+  maxTokens?: number;
 }): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
   const zero = { bodyMd: opts.bodyMd, inTokens: 0, outTokens: 0, costCents: 0 };
   if (opts.model === "mock") return zero;
@@ -46,6 +49,7 @@ async function humanizeBody(opts: {
     const res = await llm({
       system: opts.preamble,
       callerUserId: opts.callerUserId,
+      maxTokens: opts.maxTokens,
       messages: [
         {
           role: "user",
@@ -420,6 +424,16 @@ export async function generateDraftFromBrief(opts: {
   const manualImages = opts.photoMode === "manual" ? (opts.uploadedImages ?? []) : [];
   const imageSlotCount = opts.photoMode === "manual" ? manualImages.length : undefined;
 
+  /* 사용자가 제목·브리프에 명시한 목표 글자수를 추출한다.
+     WHY: 신규 작성 경로는 명시 길이를 파싱조차 안 하고 페르소나 기본 분량만 박아서
+     "2000자로 작성" 요청이 700자로 잘렸다. 명시 길이는 페르소나 기본값보다 우선한다. */
+  const lengthTarget = parseExplicitLength(`${title}\n${brief}`);
+  /* 한국어 출력은 글자당 ~1~1.5토큰 + 마크업 오버헤드 → 목표글자×2.2에 여유를 더해 천장을 잡는다.
+     기본 4096토큰은 2000자 이상 한국어 본문을 잘라낸다. */
+  const bodyMaxTokens = lengthTarget
+    ? Math.min(16000, Math.max(4096, Math.round(lengthTarget * 2.2) + 1200))
+    : undefined;
+
   /* --- Step 1 대체: 사용자 지정 주제를 topicCandidate로 기록 --- */
   const [topicRow] = await db
     .insert(schema.topicCandidates)
@@ -449,6 +463,7 @@ export async function generateDraftFromBrief(opts: {
           topic: { title, angle: topicRow.angle, primaryKeyword, secondaryKeywords },
           userBrief: brief,
           imageSlotCount,
+          lengthTarget: lengthTarget ?? undefined,
         }),
       },
     ],
@@ -468,6 +483,7 @@ export async function generateDraftFromBrief(opts: {
   const bodyRes = await llm({
     system: preamble,
     callerUserId: opts.callerUserId,
+    maxTokens: bodyMaxTokens,
     messages: [
       {
         role: "user",
@@ -476,19 +492,77 @@ export async function generateDraftFromBrief(opts: {
           topic: { title, primaryKeyword, secondaryKeywords },
           outline,
           userBrief: brief,
+          lengthTarget: lengthTarget ?? undefined,
         }),
       },
     ],
   });
-  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 --- */
+  let rawBody = bodyRes.text.trim();
+  let bodyInTokens = bodyRes.inputTokens;
+  let bodyOutTokens = bodyRes.outputTokens;
+  let bodyCostCents = bodyRes.costCents;
+
+  /* --- Step 3.4: 명시 길이 미달 시 반복 확장(최대 2회) ---
+     WHY: 모델이 큰 분량을 단일 패스로 잘 안 따른다. 직전 본문을 입력으로 같은 목표를 다시 걸어
+     목표의 90%에 도달하거나 더 이상 안 늘면 중단한다(반려 재작성 경로와 동일 전략). */
+  if (lengthTarget) {
+    let cur = rawBody.replace(/\s+/g, "").length;
+    // 큰 확장 목표(갭 ≥1000자)는 패스를 한 번 더 준다 — 더 안 늘면 아래에서 자동 중단되므로 비용 안전.
+    const maxPasses = lengthTarget - cur >= 1000 ? 3 : 2;
+    for (let pass = 0; pass < maxPasses && cur < lengthTarget * 0.9; pass++) {
+      const gap = lengthTarget - cur;
+      const addSections = Math.max(2, Math.round(gap / 500));
+      const more = await llm({
+        system: preamble,
+        callerUserId: opts.callerUserId,
+        maxTokens: bodyMaxTokens,
+        messages: [
+          {
+            role: "user",
+            content: [
+              `# 작업: 아래 본문을 목표 길이까지 확장`,
+              `현재 본문은 공백 제외 약 ${cur}자입니다. 사용자가 요청한 목표는 약 ${lengthTarget}자(±10%)이므로 약 ${gap}자를 더 써야 합니다.`,
+              `기존 내용·톤·말투·금지어·이미지 마커(<!-- IMG:slot=N -->)는 그대로 유지하고, 새로운 H2(##) 섹션을 ${addSections}개 이상 추가하거나 기존 섹션에 구체 정보를 덧붙여 자연스럽게 늘리세요. 같은 말 반복·군더더기는 금지. 페르소나 기본 길이 상한은 이 글에 한해 무시합니다.`,
+              `제목(#)은 쓰지 말고 H2(##)부터. Markdown 본문만 출력.`,
+              ``,
+              `**현재 본문**:`,
+              "```markdown",
+              rawBody,
+              "```",
+            ].join("\n"),
+          },
+        ],
+      });
+      const next = more.text
+        .trim()
+        .replace(/^```(?:markdown)?/i, "")
+        .replace(/```\s*$/i, "")
+        .trim();
+      const nextChars = next.replace(/\s+/g, "").length;
+      bodyInTokens += more.inputTokens;
+      bodyOutTokens += more.outputTokens;
+      bodyCostCents += more.costCents;
+      if (nextChars <= cur * 1.02) break; // 더 안 늘면 직전 최선값 유지하고 중단
+      rawBody = next;
+      cur = nextChars;
+    }
+  }
+
+  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 ---
+     명시 길이 글은 humanize가 분량을 깎지 못하도록 minChars(현재 95%) floor + max_tokens를 건다. */
+  const humMinChars = lengthTarget
+    ? Math.round(rawBody.replace(/\s+/g, "").length * 0.95)
+    : undefined;
   const hum = await humanizeBody({
-    bodyMd: bodyRes.text.trim(),
+    bodyMd: rawBody,
     title,
     preamble,
     callerUserId: opts.callerUserId,
     model: bodyRes.model,
     brandName: persona.blogName,
     primaryKeyword,
+    minChars: humMinChars,
+    maxTokens: bodyMaxTokens,
   });
   const bodyMd = hum.bodyMd;
 
@@ -499,14 +573,16 @@ export async function generateDraftFromBrief(opts: {
     primaryKeyword,
     secondaryKeywords,
     imageCount: outline.imagePlan.length,
-    minLen: persona.preferredLengthMin,
-    maxLen: persona.preferredLengthMax,
+    // 사용자가 명시 길이를 줬으면 그 목표(±10%)를 SEO 길이 기준으로 쓴다 — 페르소나 기본 분량으로
+    // 채점하면 명시 길이 글이 '너무 김'으로 부당하게 감점된다.
+    minLen: lengthTarget ? Math.round(lengthTarget * 0.9) : persona.preferredLengthMin,
+    maxLen: lengthTarget ? Math.round(lengthTarget * 1.2) : persona.preferredLengthMax,
   });
   const human = scoreHuman({ bodyMd, forbiddenWords: persona.forbiddenWords });
 
-  const totalInTokens = outlineRes.inputTokens + bodyRes.inputTokens + hum.inTokens;
-  const totalOutTokens = outlineRes.outputTokens + bodyRes.outputTokens + hum.outTokens;
-  const totalCostCents = outlineRes.costCents + bodyRes.costCents + hum.costCents;
+  const totalInTokens = outlineRes.inputTokens + bodyInTokens + hum.inTokens;
+  const totalOutTokens = outlineRes.outputTokens + bodyOutTokens + hum.outTokens;
+  const totalCostCents = outlineRes.costCents + bodyCostCents + hum.costCents;
 
   /* --- Step 5: persist draft --- */
   const [draft] = await db
@@ -639,37 +715,67 @@ export async function reviseDraftWithFeedback(opts: {
       feedbackTags: safeJson<string[]>(r.feedbackTagsJson) ?? [],
     }));
 
-  const res = await llm({
-    system: preamble,
-    callerUserId: opts.callerUserId,
-    messages: [
-      {
-        role: "user",
-        content: revisePrompt({
-          persona,
-          currentTitle: draft.title,
-          currentBodyMd: draft.bodyMd,
-          feedback: opts.feedback,
-          feedbackTags: opts.feedbackTags,
-          priorFeedbacks,
-        }),
-      },
-    ],
-  });
-  const parsed =
-    safeJson<{ title: string; bodyMd: string }>(res.text) ?? {
-      title: draft.title,
-      bodyMd: res.text,
-    };
-
-  /* 재작성 결과도 AI 티 제거(사람화) 패스 적용.
-     분량 늘리기 반려면 humanize가 길이를 깎지 못하도록 minChars(revise 결과의 95%)를 건다. */
+  /* 길이 의도를 LLM 호출 전에 계산한다 — 큰 확장 목표면 max_tokens를 올리고(기본 4096은
+     3000자 한국어 출력+JSON을 잘라낸다), 결과가 목표에 크게 못 미치면 확장 패스를 반복하기 위함. */
   const lenIntent = parseLengthIntent(
     opts.feedback,
     draft.bodyMd.replace(/\s+/g, "").length,
     persona.preferredLengthMin,
     persona.preferredLengthMax
   );
+  /* 한국어는 글자당 대략 1~1.5토큰 + JSON/마크업 오버헤드 → 목표글자×2.2에 여유를 더해 천장을 잡는다. */
+  const reviseMaxTokens =
+    lenIntent?.direction === "up"
+      ? Math.min(16000, Math.max(4096, Math.round(lenIntent.targetChars * 2.2) + 1200))
+      : undefined;
+
+  const reviseOnce = (currentTitle: string, currentBodyMd: string) =>
+    llm({
+      system: preamble,
+      callerUserId: opts.callerUserId,
+      maxTokens: reviseMaxTokens,
+      messages: [
+        {
+          role: "user",
+          content: revisePrompt({
+            persona,
+            currentTitle,
+            currentBodyMd,
+            feedback: opts.feedback,
+            feedbackTags: opts.feedbackTags,
+            priorFeedbacks,
+          }),
+        },
+      ],
+    });
+
+  let res = await reviseOnce(draft.title, draft.bodyMd);
+  const parsed =
+    safeJson<{ title: string; bodyMd: string }>(res.text) ?? {
+      title: draft.title,
+      bodyMd: res.text,
+    };
+
+  /* 확장 목표 미달 시 반복 확장(최대 2회 추가).
+     WHY: 모델이 큰 분량 확장을 단일 패스로 잘 안 따른다(실측 600→3000 요청에 ~900자, 30%).
+     직전 결과를 입력으로 같은 목표를 다시 걸어, 목표의 90%에 도달하거나 더 이상 안 늘면 중단한다. */
+  if (lenIntent?.direction === "up") {
+    const target = lenIntent.targetChars;
+    let cur = parsed.bodyMd.replace(/\s+/g, "").length;
+    for (let pass = 0; pass < 2 && cur < target * 0.9; pass++) {
+      const more = await reviseOnce(parsed.title, parsed.bodyMd);
+      const next = safeJson<{ title: string; bodyMd: string }>(more.text);
+      const nextChars = next ? next.bodyMd.replace(/\s+/g, "").length : 0;
+      if (!next || nextChars <= cur * 1.02) break; // 더 안 늘면(또는 파싱 실패) 직전 최선값 유지하고 중단
+      parsed.title = next.title;
+      parsed.bodyMd = next.bodyMd;
+      cur = nextChars;
+      res = more;
+    }
+  }
+
+  /* 재작성 결과도 AI 티 제거(사람화) 패스 적용.
+     분량 늘리기 반려면 humanize가 길이를 깎지 못하도록 minChars(revise 결과의 95%)를 건다. */
   const humMinChars =
     lenIntent?.direction === "up"
       ? Math.round(parsed.bodyMd.replace(/\s+/g, "").length * 0.95)
@@ -683,6 +789,7 @@ export async function reviseDraftWithFeedback(opts: {
     brandName: persona.blogName,
     primaryKeyword: persona.focusKeywords[0],
     minChars: humMinChars,
+    maxTokens: reviseMaxTokens,
   });
   parsed.bodyMd = hum.bodyMd;
 
