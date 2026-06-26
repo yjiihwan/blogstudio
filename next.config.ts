@@ -15,7 +15,16 @@ const SECURITY_HEADERS = [
   },
 ];
 
+// 버전 스큐(version skew) 보호: 배포가 바뀌면 client/server 빌드가 어긋나
+// 서버 액션 ID가 안 맞고("Failed to find Server Action ... older or newer deployment")
+// 초안 생성 POST가 통째로 실패 → 인앱 웹뷰가 "This page couldn't load"를 띄운다.
+// deploymentId를 박아두면 client가 불일치를 감지했을 때 하드 리로드로 자동 복구한다.
+// Railway는 GitHub 연결 서비스의 빌드·런타임 양쪽에 RAILWAY_GIT_COMMIT_SHA를 동일하게 주입.
+const deploymentId =
+  process.env.NEXT_DEPLOYMENT_ID || process.env.RAILWAY_GIT_COMMIT_SHA || undefined;
+
 const nextConfig: NextConfig = {
+  ...(deploymentId ? { deploymentId } : {}),
   // 네이티브 모듈 및 번들러 비호환 패키지는 외부로 분리
   serverExternalPackages: ["better-sqlite3", "openai", "@anthropic-ai/sdk"],
   experimental: {
