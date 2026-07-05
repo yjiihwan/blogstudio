@@ -26,6 +26,12 @@ export function ManualDraftForm({
   );
   const [photoMode, setPhotoMode] = useState<"manual" | "auto">("manual");
   const [fileNames, setFileNames] = useState<string[]>([]);
+  // 제어 입력 — React 19는 <form action> 제출 후 '비제어' 필드를 자동 리셋한다.
+  // 되묻기(needsInfo)는 리다이렉트 없이 상태만 반환하므로, 제어하지 않으면 제목/내용이 지워져
+  // 보강 재제출 시 required 검증에 막힌다. useState는 왕복 간 값이 유지된다.
+  const [title, setTitle] = useState("");
+  const [brief, setBrief] = useState("");
+  const [keywords, setKeywords] = useState("");
 
   return (
     <form action={action} className="space-y-6">
@@ -43,6 +49,8 @@ export function ManualDraftForm({
           id="title"
           name="title"
           required
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
           placeholder="예: 6월 신메뉴 출시 이벤트 안내"
         />
       </div>
@@ -55,6 +63,8 @@ export function ManualDraftForm({
           name="brief"
           required
           rows={7}
+          value={brief}
+          onChange={(e) => setBrief(e.target.value)}
           placeholder={
             "글에 꼭 담고 싶은 내용을 자유롭게 적어주세요.\n예) 6/20~30 한정 신메뉴 '직화 불고기 덮밥' 출시. 가격 9,900원, 첫 주 방문 고객 음료 무료. 매장 한정 판매. 매콤달콤한 맛 강조."
           }
@@ -70,6 +80,8 @@ export function ManualDraftForm({
         <Input
           id="keywords"
           name="keywords"
+          value={keywords}
+          onChange={(e) => setKeywords(e.target.value)}
           placeholder="예: 신메뉴, 직화 불고기 덮밥, 6월 이벤트"
         />
       </div>
