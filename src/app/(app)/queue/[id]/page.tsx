@@ -115,6 +115,34 @@ export default async function DraftDetailPage({
         )}
       </header>
 
+      {/* 생성 단계 검수 메모 — 저장된 seoIssues 중 표준 SEO 체크가 아닌 특수 안내
+          (ℹ️ 정보부족 한계고지 · 🧹 사실검증 제거 · ⚠️ 미검증 주장 잔존)만 노출한다.
+          SEO 패널은 본문으로 재계산되므로 이 플래그들이 사라져 검수자가 놓치던 문제를 보완. */}
+      {(() => {
+        let notes: string[] = [];
+        try {
+          notes = JSON.parse(draft.seoIssuesJson ?? "[]") as string[];
+        } catch {
+          notes = [];
+        }
+        const memos = notes.filter((n) => /^(ℹ️|🧹|⚠️)/.test(n));
+        if (!memos.length) return null;
+        return (
+          <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4">
+            <p className="mb-1.5 text-sm font-semibold text-amber-800">
+              생성 단계 검수 메모
+            </p>
+            <ul className="space-y-1 text-sm text-amber-700">
+              {memos.map((m, i) => (
+                <li key={i} className="whitespace-pre-wrap">
+                  {m}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })()}
+
       <DraftReview
         key={`${draft.id}:${draft.revisionRound}`}
         draftId={draft.id}
