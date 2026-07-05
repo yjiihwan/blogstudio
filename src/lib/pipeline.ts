@@ -763,6 +763,15 @@ export async function generateDraftFromBrief(opts: {
      되묻고(NeedsMoreInfoError), 진전 없이 종료(stalled)면 누적 정보만으로 최선 생성 + 한계 고지. */
   const { supplements, stalled } = mergeAugment(opts.augment);
   const preReport = assessInsufficiency(persona, { lengthTarget, userBrief: brief, supplements });
+  console.error("[AUGDBG-manual]", JSON.stringify({
+    augIn: opts.augment,
+    lengthTarget,
+    supplements,
+    stalled,
+    sufficient: preReport.sufficient,
+    signals: preReport.signals,
+    personaFields: { purpose: !!persona.purpose?.trim(), audience: !!persona.audience?.trim(), brandVoice: !!persona.brandVoice?.trim(), facilities: persona.facilities.length },
+  }));
   if (!preReport.sufficient && !stalled) {
     throw new NeedsMoreInfoError(preReport.requestMessage, preReport.missingFields, supplements);
   }
