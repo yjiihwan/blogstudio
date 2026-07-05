@@ -19,6 +19,10 @@ export type PersonaInput = {
   forbiddenWords: string[];
   ctas: string[];
   qualityRules: string[];
+  /** 실제 제공하는 시설·프로그램(확정). 이 목록에 있는 것만 '있다'고 쓸 수 있다. */
+  facilities: string[];
+  /** 없는 시설·서비스(예: 수영장·사우나·골프). 제목/본문에 나와도 사실로 취급 금지. */
+  absentFacilities: string[];
   sampleSnippets: string[];
   preferredLengthMin: number;
   preferredLengthMax: number;
@@ -69,6 +73,15 @@ export function personaPreamble(p: PersonaInput) {
     p.qualityRules.length
       ? `**품질 규칙**:\n${p.qualityRules.map((r) => `- ${r}`).join("\n")}`
       : null,
+    p.facilities.length
+      ? `**제공 시설·프로그램 (확정 — 이 목록에 있는 것만 실제로 존재. 없는 건 없다고 간주)**: ${p.facilities.join(", ")}`
+      : null,
+    p.absentFacilities.length
+      ? `**⚠️ 없는 시설·서비스 (언급·암시 절대 금지)**: ${p.absentFacilities.join(", ")} — 제목·소제목·본문 어디에도 있는 것처럼 쓰지 마라. 자동 생성된 제목/주제에 이 단어가 섞여 있어도 사실로 취급하지 말고 걷어내라.`
+      : null,
+    p.facilities.length || p.absentFacilities.length
+      ? `※ 위 '제공 시설·프로그램'에 없는 부대시설·프로그램(예: 수영장·사우나·스파·골프·찜질방 등)은 이 업체에 없는 것으로 간주한다. 계절·날씨는 글의 분위기·감각 묘사로만 쓰고, 그 계절에 어울리는 '없는 시설'을 연상해 끌어들이지 마라(예: 여름이라고 헬스장 글에 수영·물놀이를 넣는 것 금지).`
+      : null,
     p.ctas.length
       ? `**참고용 CTA 문구**: \n${p.ctas.map((c) => `- ${c}`).join("\n")}`
       : null,
@@ -89,10 +102,22 @@ export function topicResearchPrompt(opts: {
   recentTitles: string[];
   season: string; // e.g. "2026년 5월 말, 초여름"
 }) {
+  const fac = opts.persona.facilities ?? [];
+  const absent = opts.persona.absentFacilities ?? [];
   return [
     `# 작업: 다음 주에 발행할 후보 주제 5개 제안`,
     ``,
     `시기적 맥락: ${opts.season}`,
+    ``,
+    `⚠️ 시설·서비스 범위 제약 (매우 중요 — 없는 시설 날조 방지):`,
+    `- 제목·앵글·키워드는 이 블로그가 **실제 제공하는 시설·프로그램 범위 안에서만** 만든다. 확인되지 않은 부대시설·프로그램을 상상해 주제로 삼지 마라.`,
+    fac.length
+      ? `- 확정 제공 시설·프로그램(이 안에서만): ${fac.join(", ")}`
+      : `- (확정 시설 목록 미설정 — 업종상 당연한 기본 범위만 쓰고, 특수 부대시설을 가정하지 마라.)`,
+    absent.length
+      ? `- ⛔ 없는 것(제목·앵글·키워드에 절대 등장 금지): ${absent.join(", ")}`
+      : null,
+    `- 시즌/날씨(${opts.season})는 글의 분위기·감각으로만 활용하고, 그 계절에 어울리는 '없는 시설'을 상상해 제목에 넣지 마라(예: 여름→수영/물놀이, 겨울→사우나/스파). 헬스장인데 '수영'을 앵글로 잡는 식의 주제는 금지.`,
     ``,
     `최근 발행 제목 (중복 회피):`,
     opts.recentTitles.length
@@ -114,6 +139,387 @@ export function topicResearchPrompt(opts: {
     "```",
     `반드시 위 JSON만 응답하세요. 코드블록 표시 없이.`,
   ].join("\n");
+}
+
+/**
+ * 발행 전 게이트: 페르소나에 '없는 시설'로 명시된 키워드가 제목/본문에 등장하는지 검사한다.
+ * 자동 생성 단계가 없는 시설(수영장·사우나 등)을 지어낸 초안을 걸러내는 최후 방어선.
+ * absentFacilities 항목은 '수영','사우나'처럼 바로 매칭되는 명사로 시딩한다.
+ */
+export function findAbsentFacilityHits(
+  text: string,
+  absentFacilities: string[]
+): string[] {
+  if (!text || !absentFacilities?.length) return [];
+  const hay = text.toLowerCase();
+  const hits = new Set<string>();
+  for (const raw of absentFacilities) {
+    const term = (raw || "").trim().toLowerCase();
+    if (term.length < 2) continue;
+    if (hay.includes(term)) hits.add(raw.trim());
+  }
+  return [...hits];
+}
+
+/**
+ * 페르소나의 '확정 사실'을 한 덩어리 그라운딩 텍스트로 모은다.
+ * 사실검증(fact-guard)의 기준이 되는 유일한 근거 — 이 밖의 구체 주장은 '지어낸 것'으로 취급한다.
+ * 스타일 샘플·CTA는 제외한다(다른 글의 수치가 섞여 거짓을 세탁할 수 있으므로 근거로 쓰지 않는다).
+ */
+export function buildGroundingText(
+  p: PersonaInput,
+  extra?: {
+    title?: string;
+    primaryKeyword?: string;
+    secondaryKeywords?: string[];
+    userBrief?: string;
+    /** 보강 루프에서 사용자가 라운드마다 추가로 제출한 확정 정보(누적). 근거로 취급한다. */
+    supplements?: string[];
+  }
+): string {
+  const parts: string[] = [];
+  const push = (label: string, val: string | string[] | null | undefined) => {
+    if (!val) return;
+    const s = Array.isArray(val) ? val.filter(Boolean).join(", ") : String(val).trim();
+    if (s) parts.push(`- ${label}: ${s}`);
+  };
+  push("상호(업체명)", p.blogName);
+  push("업종·니치", p.niche);
+  push("목적", p.purpose);
+  push("타겟 독자", p.audience);
+  push("제공 시설·프로그램(확정)", p.facilities);
+  push("핵심 키워드", p.focusKeywords);
+  push("품질 규칙", p.qualityRules);
+  push("기타 컨텍스트", p.notes);
+  if (extra?.title) push("이번 글 제목", extra.title);
+  if (extra?.primaryKeyword) push("메인 키워드", extra.primaryKeyword);
+  if (extra?.secondaryKeywords?.length) push("보조 키워드", extra.secondaryKeywords);
+  if (extra?.userBrief?.trim()) push("사용자가 직접 입력한 내용", extra.userBrief.trim());
+  // 누적 보강 정보도 확정 근거에 포함 — factGuard 가 이 값을 근거로 인정해 정상 확장을 허용한다.
+  for (const s of extra?.supplements ?? []) {
+    if (s && s.trim()) push("사용자 추가 제공 정보(보강)", s.trim());
+  }
+  return parts.join("\n");
+}
+
+export type FabricationHit = { kind: string; match: string };
+
+/* 업종 무관 '구체적 사실 주장' 패턴. 근거(grounding)에 없으면 지어낸 것으로 본다.
+   incidental 숫자(시각·층수·주소)를 피하려 단위/문맥으로 claim 형태만 잡는다. */
+const CLAIM_PATTERNS: { kind: string; re: RegExp; requireNear?: RegExp }[] = [
+  // 고유 가격·금액 — 거의 항상 사업 주장
+  { kind: "가격·금액", re: /\d[\d,]*\s*원|\d+\s*만\s*원|₩\s*\d[\d,]*/g },
+  // 실적·할인율 — '성과·혜택' 문맥의 % 만
+  {
+    kind: "실적·할인율",
+    re: /\d{1,3}(?:\.\d)?\s*%|\d{1,3}\s*퍼센트/g,
+    requireNear:
+      /(만족|재방문|재등록|재구매|성공|합격|달성|할인|세일|특가|절감|증가|감소|개선|효과|점유|1위|수강생|고객|회원)/,
+  },
+  // 연혁·전통·설립연도
+  {
+    kind: "연혁·전통",
+    re: /\d+\s*년\s*(?:전통|역사|경력|노하우|업력|운영)|(?:설립|창립|개원|개업|오픈)\s*(?:19|20)\d{2}|since\s*(?:19|20)\d{2}/gi,
+  },
+  // 수상·인증·순위·선정
+  {
+    kind: "수상·인증·순위",
+    re: /대상\s*수상|최우수상|우수상|금상|은상|동상|\d+\s*위\b|1위|1등|맛집\s*선정|베스트\s*\d+|공식\s*인증|정품\s*인증|특허\s*(?:등록|출원)|미쉐린|블루리본/g,
+  },
+  // 규모·수치(지점·회원·좌석·객실·평수 등)
+  {
+    kind: "규모·수치",
+    re: /\d[\d,]*\s*(?:호점|개\s*지점|명(?:의)?\s*(?:회원|고객|수강생|환자|원생)|평(?:형|규모|대)?\s*(?:규모|매장)|석\s*규모|객실\s*\d|테이블\s*\d+\s*개)/g,
+  },
+  // 평점·후기 수
+  {
+    kind: "평점·후기수",
+    re: /평점\s*\d(?:\.\d)?|별점\s*\d|후기\s*\d[\d,]*\s*(?:개|건)|리뷰\s*\d[\d,]*\s*(?:개|건)/g,
+  },
+];
+
+function claimGrounded(matchStr: string, grounding: string): boolean {
+  const g = grounding.toLowerCase();
+  const digits = matchStr.match(/\d[\d,]*/g);
+  if (digits && digits.length) {
+    return digits.every((d) => g.includes(d.replace(/,/g, "")) || g.includes(d.toLowerCase()));
+  }
+  return g.includes(matchStr.toLowerCase());
+}
+
+/**
+ * 발행 전 결정론 게이트(업종 무관): 제목+본문에서 '확정 사실(grounding)'로 뒷받침되지 않는
+ * 구체 주장(가격·수치·할인·연혁·수상·규모·평점) + 페르소나 '없는 시설'을 검출한다.
+ * 헬스장 전용이 아니라 모든 업종에서 동작한다. 비차단 플래그 용도 + 사실검증 후 잔존 확인용.
+ */
+export function findFabricationHits(
+  text: string,
+  grounding: string,
+  absentFacilities: string[] = []
+): FabricationHit[] {
+  if (!text) return [];
+  const hits: FabricationHit[] = [];
+  const seen = new Set<string>();
+  const add = (kind: string, match: string) => {
+    const k = `${kind}|${match.toLowerCase()}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    hits.push({ kind, match });
+  };
+  // '없는 시설'은 강한 하드 카테고리로 유지
+  const hay = text.toLowerCase();
+  for (const raw of absentFacilities ?? []) {
+    const term = (raw || "").trim();
+    if (term.length >= 2 && hay.includes(term.toLowerCase())) add("없는 시설", term);
+  }
+  for (const { kind, re, requireNear } of CLAIM_PATTERNS) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const s = m[0].trim();
+      if (requireNear) {
+        const from = Math.max(0, m.index - 25);
+        const window = text.slice(from, m.index + m[0].length + 25);
+        if (!requireNear.test(window)) continue;
+      }
+      if (claimGrounded(s, grounding)) continue;
+      add(kind, s);
+    }
+  }
+  return hits;
+}
+
+/**
+ * 발행 전 사실검증(fact-guard) 프롬프트 — 업종 무관.
+ * '확정 사실'로 뒷받침되지 않는 구체 주장을 걷어낸(또는 일반화한) 전체 본문을 JSON으로 돌려받는다.
+ * 특정 업종 하드코딩 없음. grounding 이 비어도 안전하게 동작(고유 수치·실적·시설 주장 자체를 금지).
+ */
+export function factGuardPrompt(opts: {
+  groundingText: string;
+  title: string;
+  bodyMd: string;
+}): string {
+  return [
+    `# 작업: 아래 블로그 본문에서 '근거 없는 구체적 사실 주장'을 걷어내라 (발행 전 사실검증).`,
+    ``,
+    `아래 "확정 사실"은 이 업체에 대해 검증된 정보의 전부다. 본문에 등장하는 **구체적 사실 주장**이`,
+    `이 확정 사실로 뒷받침되지 않으면 **지어낸 것으로 간주**하고 고쳐라. 대상 예:`,
+    `- 고유 가격·금액, 할인율·만족도·재방문율·성공률 같은 수치 실적`,
+    `- "N년 전통"·설립연도 같은 연혁, 수상·인증·순위·선정 실적`,
+    `- 회원수·지점수·좌석/객실/평수 같은 규모 수치, 평점·후기 수`,
+    `- 확정 목록에 없는 특정 부대시설·프로그램·클래스·이벤트·혜택`,
+    ``,
+    `고치는 원칙:`,
+    `1. 근거 없는 주장을 담은 문장을 삭제하거나, 고유 수치·주장을 빼고 일반적 서술로 바꾼다.`,
+    `2. 삭제로 문단이 어색해지면 자연스럽게 다듬되 **새 사실을 또 지어내지 마라.**`,
+    `3. 확정 사실로 뒷받침되는 내용, 분위기·감각·독자 관점·일반적 정황 서술은 **그대로 둔다.**`,
+    `4. 말투·톤·격식·전체 길이·이미지 마커(\`<!-- IMG:slot=N -->\`)·제목은 그대로 유지한다(길이를 크게 줄이지 말 것).`,
+    `5. 애매하면(근거가 있는지 불확실하면) 고유 수치·주장을 빼는 쪽을 택한다.`,
+    ``,
+    `## 확정 사실 (이 밖의 구체 사실은 지어낸 것으로 취급)`,
+    opts.groundingText?.trim() ||
+      "(제공된 확정 사실 없음 — 업종상 당연한 일반 서술만 허용하고, 고유 수치·실적·수상·구체 시설/프로그램 주장은 모두 근거 없음으로 간주해 제거)",
+    ``,
+    `## 제목`,
+    opts.title,
+    ``,
+    `## 본문(Markdown)`,
+    "```",
+    opts.bodyMd,
+    "```",
+    ``,
+    `아래 JSON만 출력하세요(코드블록 표시 없이):`,
+    `{"removed": ["걷어내거나 일반화한 근거없는 주장을 짧게 나열"], "bodyMd": "수정된 전체 Markdown 본문"}`,
+    `근거 없는 주장이 하나도 없으면 removed 는 빈 배열, bodyMd 는 원본 그대로 반환하세요.`,
+  ].join("\n");
+}
+
+/* ============================================================
+   정보 부족 시 대화형 보강 루프 (conversational augmentation)
+   목표: 페르소나·입력 정보가 부족해 퀄리티 저하/목표 분량 미달이 예상되면 억지로 뽑지 말고
+   "이런 정보를 더 달라"고 구체적으로 되묻고, 받은 정보를 누적해 재생성한다.
+   무한 요청 방지: 새 입력이 공백/무의미하거나 직전 제출과 사실상 동일(정규화 비교)하면
+   되묻기를 멈추고 누적 정보만으로 최선의 결과를 낸 뒤 '정보 부족으로 일반화' 한계를 고지한다.
+   자동·반자동 두 경로가 공유한다. 순수 함수 — LLM/DB 의존 없음(단위 검증 가능).
+   ============================================================ */
+
+export type AugmentSignal =
+  | { kind: "persona_fields"; missing: string[] }
+  | { kind: "grounding_thin"; anchors: number; needed: number; targetChars: number }
+  | { kind: "length_unfillable"; reachedChars: number; targetChars: number; fabricationKinds: string[] };
+
+export type InsufficiencyReport = {
+  sufficient: boolean;
+  signals: AugmentSignal[];
+  /** 사용자에게 요청할 구체 항목(라벨) */
+  missingFields: string[];
+  /** 사용자 노출용 "이런 정보를 더 주세요" 안내문 */
+  requestMessage: string;
+};
+
+const FIELD_LABELS: Record<string, string> = {
+  purpose: "글의 목적 — 이 글로 무엇을 홍보/안내하려는지",
+  audience: "타겟 독자 — 누구에게 읽히려는 글인지(연령·상황 등)",
+  brandVoice: "원하는 톤·말투 — 예: 친근한 반말체 / 정중한 존댓말 / 전문가 해설",
+  facilities: "실제 제공하는 시설·프로그램·서비스의 구체 목록(사실 근거) — 없는 것을 지어내지 않으려면 필요합니다",
+  material: "목표 분량을 채울 구체 소재 — 제공 서비스 상세, 이용 방법·팁, 실제 사례/후기 요지, 자주 묻는 질문 등",
+};
+
+/** 누적 보강 텍스트 전체를 하나로 이어 근거·소재 밀도를 가늠할 때 쓴다. */
+function supplementsBlob(supplements: string[]): string {
+  return (supplements ?? []).filter(Boolean).join(" ");
+}
+
+/**
+ * 착수 전 정보 부족 판정(신호 ①②).
+ * ① 페르소나 필수 필드(목적·타겟·톤) 공백.
+ * ② 확정 사실(grounding)의 '사실 앵커' 수가 목표 분량 대비 부족(근거 밀도 갭).
+ * 누적 보강 정보가 채워지면 앵커/필드가 충족되어 sufficient=true 로 바뀐다.
+ */
+export function assessInsufficiency(
+  p: PersonaInput,
+  opts: {
+    lengthTarget?: number | null;
+    userBrief?: string;
+    /** 지금까지 누적된 보강 라운드 입력들 */
+    supplements?: string[];
+  }
+): InsufficiencyReport {
+  const supplements = opts.supplements ?? [];
+  const suppBlob = supplementsBlob(supplements);
+  const suppChars = suppBlob.replace(/\s+/g, "").length;
+  const brief = (opts.userBrief ?? "").trim();
+  const briefChars = brief.replace(/\s+/g, "").length;
+  const signals: AugmentSignal[] = [];
+  const missing: string[] = [];
+
+  // ① 필수 필드 — 보강 정보가 넉넉하면(≥40자) 톤/목적/타겟을 사용자가 말로 채운 것으로 보고 완화.
+  const suppCoversFields = suppChars >= 40 || briefChars >= 40;
+  const fieldMissing: string[] = [];
+  if (!p.purpose?.trim() && !suppCoversFields) fieldMissing.push("purpose");
+  if (!p.audience?.trim() && !suppCoversFields) fieldMissing.push("audience");
+  if (!p.brandVoice?.trim() && !suppCoversFields) fieldMissing.push("brandVoice");
+  if (fieldMissing.length) {
+    signals.push({ kind: "persona_fields", missing: fieldMissing });
+    for (const f of fieldMissing) missing.push(f);
+  }
+
+  // ② 근거 밀도 — 목표 분량이 있을 때만. '사실 앵커' = 지어내지 않고 쓸 수 있는 구체 소재 수.
+  // 사용자 입력/보강은 하나의 긴 문장이라도 여러 사실을 담으므로 구분자로 쪼개 조각 수로 센다
+  // (예: "PT, GX, 인바디, 식단 코칭" → 앵커 4). 사소한 조각(3자 미만)은 제외.
+  if (opts.lengthTarget && opts.lengthTarget > 0) {
+    const countFragments = (texts: string[]) =>
+      texts
+        .flatMap((t) => t.split(/[,\n.。·、;]/))
+        .map((x) => x.trim())
+        .filter((x) => x.replace(/\s+/g, "").length >= 3).length;
+    const anchors =
+      p.facilities.length +
+      p.qualityRules.length +
+      p.focusKeywords.length +
+      (p.notes?.trim() ? 1 : 0) +
+      (p.purpose?.trim() ? 1 : 0) +
+      (p.audience?.trim() ? 1 : 0) +
+      (brief ? countFragments([brief]) : 0) +
+      countFragments(supplements);
+    // 목표 700자당 앵커 1개 필요(최소 3). 2100자→3, 3500자→5, 5000자→8.
+    const needed = Math.max(3, Math.ceil(opts.lengthTarget / 700));
+    if (anchors < needed) {
+      signals.push({ kind: "grounding_thin", anchors, needed, targetChars: opts.lengthTarget });
+      if (!p.facilities.length && !suppChars && !briefChars) missing.push("facilities");
+      missing.push("material");
+    }
+  }
+
+  const uniqMissing = [...new Set(missing)];
+  return {
+    sufficient: signals.length === 0,
+    signals,
+    missingFields: uniqMissing,
+    requestMessage: buildAugmentationRequest(uniqMissing),
+  };
+}
+
+/** 미달 신호 목록을 사용자 노출용 안내문으로 조립한다. */
+export function buildAugmentationRequest(missingFields: string[], extraContext?: string): string {
+  const bullets = missingFields
+    .map((f) => FIELD_LABELS[f])
+    .filter(Boolean)
+    .map((label) => `• ${label}`);
+  const lines = [
+    "더 정확하고 충실한 글을 쓰려면 정보가 조금 부족합니다. 아래 항목을 알려주시면 그 내용을 반영해 다시 작성할게요:",
+    ...bullets,
+  ];
+  if (extraContext) lines.push("", extraContext);
+  lines.push(
+    "",
+    "추가 정보를 입력하면 이전에 주신 내용까지 모두 합쳐 다시 씁니다. 더 줄 정보가 없으면 그대로 다시 요청해 주세요 — 있는 정보만으로 최선을 다해 작성합니다."
+  );
+  return lines.join("\n");
+}
+
+/** 생성 중 폴백(신호 ③): 1차 생성 결과가 목표 하한 미달이고, 근거 없는 확장이 factGuard 에 걸려
+ *  정상 확장으로 채우지 못한 상태인지 판정한다. 그렇다면 근거(사실 소재) 자체가 부족한 것. */
+export function isLengthUnfillable(opts: {
+  reachedChars: number;
+  lengthTarget?: number | null;
+  fabricationKinds: string[];
+}): boolean {
+  if (!opts.lengthTarget || opts.lengthTarget <= 0) return false;
+  const floor = opts.lengthTarget * 0.7;
+  return opts.reachedChars < floor && opts.fabricationKinds.length > 0;
+}
+
+/** 정규화 — 공백·문장부호·대소문자 차이를 지워 '사실상 동일' 비교에 쓴다. */
+export function normalizeSupplement(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[.,!?~…·・、。"'`()\[\]{}\-_/\\]+/g, "");
+}
+
+/**
+ * 무한 요청 방지 — '진전 없음' 판정([B]).
+ * (a) 새 입력이 공백/무의미(정규화 4자 미만)하거나
+ * (b) 직전 제출과 사실상 동일(정규화 동일 또는 80% 포함관계)이면 progressed=false.
+ * 실질 진전이 있으면 progressed=true → 누적하고 되묻기를 계속한다.
+ */
+export function assessSupplementProgress(
+  prior: string[],
+  incoming: string
+): { progressed: boolean; reason?: "empty" | "duplicate" | "no_new_content" } {
+  const norm = normalizeSupplement(incoming);
+  if (norm.length < 4) return { progressed: false, reason: "empty" };
+  const priorNorms = (prior ?? []).map(normalizeSupplement).filter(Boolean);
+  if (priorNorms.includes(norm)) return { progressed: false, reason: "duplicate" };
+  const last = priorNorms[priorNorms.length - 1];
+  if (last) {
+    const longer = norm.length >= last.length ? norm : last;
+    const shorter = norm.length >= last.length ? last : norm;
+    // 거의 포함관계(새로 추가된 실질 내용이 20% 미만)면 진전 없음으로 본다.
+    if (longer.includes(shorter) && shorter.length >= longer.length * 0.8) {
+      return { progressed: false, reason: "no_new_content" };
+    }
+  }
+  return { progressed: true };
+}
+
+/** '정보 부족으로 일반화함' 한계 고지 문구(seoIssues 플래그 + 검수 안내용). */
+export function limitationNotice(missingFields: string[]): string {
+  const labels = missingFields.map((f) => FIELD_LABELS[f]).filter(Boolean);
+  const detail = labels.length ? ` (부족: ${labels.map((l) => l.split(" — ")[0]).join(", ")})` : "";
+  return `ℹ️ 정보 부족으로 일부 내용을 일반화했습니다${detail} — 추가 사실을 제공하면 더 구체적으로 작성됩니다.`;
+}
+
+/** 누적 보강 정보를 시스템 프리앰블 끝에 확정 근거 블록으로 덧붙인다(생성이 실제로 반영하도록). */
+export function augmentedPreamble(preamble: string, supplements: string[]): string {
+  const items = (supplements ?? []).filter((s) => s && s.trim());
+  if (!items.length) return preamble;
+  const block = [
+    "## 사용자가 추가로 제공한 확정 정보 (반드시 반영, 이 밖의 구체 사실은 지어내지 말 것)",
+    ...items.map((s, i) => `${i + 1}. ${s.trim()}`),
+  ].join("\n");
+  return `${preamble}\n\n${block}`;
 }
 
 /** Step 2: outline a chosen topic. */

@@ -57,6 +57,13 @@
       "when": 1781372400000,
       "tag": "0007_blog_owner",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1781458800000,
+      "tag": "0008_persona_facilities",
+      "breakpoints": true
     }
   ]
 }

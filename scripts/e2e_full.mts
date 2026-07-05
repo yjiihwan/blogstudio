@@ -72,6 +72,8 @@ async function createBlog() {
     forbiddenWordsJson: JSON.stringify(["무조건", "100% 보장"]),
     callsToActionJson: JSON.stringify(["무료 체험 상담 예약하기"]),
     qualityRulesJson: JSON.stringify(["의학적 단정 금지", "수치는 일반적 범위로"]),
+    facilitiesJson: JSON.stringify(["웨이트 트레이닝존", "머신·프리웨이트", "유산소 존", "그룹운동(GX)", "1:1 퍼스널 트레이닝(PT)", "샤워실·탈의실"]),
+    absentFacilitiesJson: JSON.stringify(["수영", "사우나", "스파", "골프", "찜질방", "테니스"]),
     sampleSnippetsJson: "[]",
     preferredLengthMin: 1200,
     preferredLengthMax: 2200,

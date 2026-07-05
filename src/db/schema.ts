@@ -117,6 +117,13 @@ export const personas = sqliteTable("personas", {
   /* === Anti-detection / quality rules === */
   qualityRulesJson: text("quality_rules_json").notNull().default("[]"),
 
+  /* === Facility facts (없는 시설 날조 방지) ===
+     facilities: 실제 제공하는 시설·프로그램(확정 — 이 목록에 있는 것만 '있다'고 쓸 수 있음).
+     absentFacilities: 없는 것/오해 소지(예: 수영장·사우나·골프). 제목·본문에 등장해도 사실로
+     취급 금지 + 발행 전 게이트가 이 키워드로 날조를 검출한다. */
+  facilitiesJson: text("facilities_json").notNull().default("[]"),          // string[]
+  absentFacilitiesJson: text("absent_facilities_json").notNull().default("[]"), // string[]
+
   notes: text("notes"),
   ...timestamps,
 });

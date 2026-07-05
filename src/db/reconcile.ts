@@ -37,6 +37,8 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
   personas: [
     { name: "age_group", ddl: "`age_group` text" },
     { name: "gender", ddl: "`gender` text" },
+    { name: "facilities_json", ddl: "`facilities_json` text NOT NULL DEFAULT '[]'" },
+    { name: "absent_facilities_json", ddl: "`absent_facilities_json` text NOT NULL DEFAULT '[]'" },
   ],
 };
 

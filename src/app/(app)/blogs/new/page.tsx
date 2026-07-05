@@ -64,6 +64,8 @@ export default async function NewBlogPage({
           focusKeywords: [],
           forbiddenWords: ["최고", "최저가", "100%", "무조건"],
           ctas: [],
+          facilities: [],
+          absentFacilities: [],
           preferredLengthMin: 1500,
           preferredLengthMax: 2800,
           imagesPerPostMin: 3,

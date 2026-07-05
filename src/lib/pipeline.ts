@@ -17,6 +17,16 @@ import {
   topicResearchPrompt,
   parseLengthIntent,
   parseExplicitLength,
+  findAbsentFacilityHits,
+  buildGroundingText,
+  findFabricationHits,
+  factGuardPrompt,
+  assessInsufficiency,
+  assessSupplementProgress,
+  isLengthUnfillable,
+  limitationNotice,
+  buildAugmentationRequest,
+  augmentedPreamble,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sendTelegramToUser } from "./telegram";
@@ -86,6 +96,176 @@ async function humanizeBody(opts: {
 }
 
 /**
+ * 발행 전 사실검증(fact-guard) 리라이트 패스 — 업종 무관 '완전 차단' 층.
+ * 확정 사실(grounding)로 뒷받침되지 않는 구체 주장(가격·수치·할인·연혁·수상·규모·시설·이벤트)을
+ * LLM이 걷어낸(또는 일반화한) 본문을 돌려준다. 전역 가이드가 켜져 있을 때만, mock 제외.
+ * 안전장치는 humanize와 동일 — 이미지 마커 유실/과도 축소면 원본 유지(토큰만 정산).
+ */
+async function factGuardBody(opts: {
+  bodyMd: string;
+  title: string;
+  groundingText: string;
+  preamble: string;
+  callerUserId?: string;
+  model: string;
+  maxTokens?: number;
+}): Promise<{
+  bodyMd: string;
+  removed: string[];
+  inTokens: number;
+  outTokens: number;
+  costCents: number;
+}> {
+  const zero = { bodyMd: opts.bodyMd, removed: [] as string[], inTokens: 0, outTokens: 0, costCents: 0 };
+  if (opts.model === "mock") return zero;
+  const guide = await getGlobalWritingGuide();
+  if (!guide.enabled || !guide.text.trim()) return zero;
+  try {
+    const res = await llm({
+      system: opts.preamble,
+      callerUserId: opts.callerUserId,
+      maxTokens: opts.maxTokens,
+      messages: [
+        {
+          role: "user",
+          content: factGuardPrompt({
+            groundingText: opts.groundingText,
+            title: opts.title,
+            bodyMd: opts.bodyMd,
+          }),
+        },
+      ],
+    });
+    const cost = { inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
+    const parsed = safeJson<{ removed?: string[]; bodyMd?: string }>(res.text);
+    if (!parsed || typeof parsed.bodyMd !== "string") return { ...zero, ...cost };
+    const out = parsed.bodyMd
+      .trim()
+      .replace(/^```(?:markdown|json)?/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    const removed = Array.isArray(parsed.removed) ? parsed.removed.filter((s) => typeof s === "string") : [];
+    const origImgs = (opts.bodyMd.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
+    const newImgs = (out.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
+    const outChars = out.replace(/\s+/g, "").length;
+    const origChars = opts.bodyMd.replace(/\s+/g, "").length;
+    // 이미지 마커 유실, 과도 축소(50% 미만), 빈 응답이면 원본 유지(제거 목록은 감사용으로 보존).
+    if (newImgs < origImgs || outChars < origChars * 0.5 || out.length < 50) {
+      return { bodyMd: opts.bodyMd, removed, ...cost };
+    }
+    return { bodyMd: out, removed, ...cost };
+  } catch {
+    return zero;
+  }
+}
+
+/**
+ * 목표 길이에 못 미친 본문을 목표까지 반복 확장한다(최대 3패스).
+ * WHY: 모델은 큰 분량을 단일 패스로 잘 안 따른다(자동·반자동 공통). "전체를 다시 길게 써라"는
+ * 방식은 gpt-4o가 비슷한 길이로 리라이트해버려 증가가 안 됐다(실측 982자에서 정체).
+ * 그래서 "아직 안 다룬 소주제로 이어질 새 H2 섹션만 작성"하게 하고 기존 본문 뒤에 덧붙인다 —
+ * 증가가 구조적으로 보장되고 모델이 훨씬 잘 따른다. 목표의 95%에 도달하거나 새 내용을
+ * 못 만들면 중단한다. 자동·반자동 경로가 이 한 함수를 공유한다.
+ */
+async function expandBodyToTarget(opts: {
+  rawBody: string;
+  lengthTarget: number;
+  preamble: string;
+  callerUserId?: string;
+  maxTokens?: number;
+}): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
+  const noWs = (s: string) => s.replace(/\s+/g, "").length;
+  let rawBody = opts.rawBody;
+  let cur = noWs(rawBody);
+  let inTokens = 0;
+  let outTokens = 0;
+  let costCents = 0;
+  // 갭이 클수록 패스를 더 준다 — 새 내용을 못 만들면 아래에서 자동 중단되므로 비용 안전.
+  const maxPasses = opts.lengthTarget - cur >= 1000 ? 3 : 2;
+  for (let pass = 0; pass < maxPasses && cur < opts.lengthTarget * 0.95; pass++) {
+    const gap = opts.lengthTarget - cur;
+    const addSections = Math.max(2, Math.round(gap / 450));
+    const more = await llm({
+      system: opts.preamble,
+      callerUserId: opts.callerUserId,
+      maxTokens: opts.maxTokens,
+      messages: [
+        {
+          role: "user",
+          content: [
+            `# 작업: 아래 블로그 본문에 이어질 새 섹션을 작성`,
+            `현재 본문은 공백 제외 약 ${cur}자입니다. 목표 약 ${opts.lengthTarget}자까지 약 ${gap}자가 더 필요합니다.`,
+            `아래 "기존 본문"에서 아직 다루지 않은 소주제로 새 H2(##) 섹션을 ${addSections}개 작성하세요. 각 섹션은 공백 제외 300~500자 분량의 구체적 내용으로.`,
+            `- 기존 본문 내용을 반복하지 말고, 새로운 정보·관점·이용 팁·자주 묻는 질문 등으로 다양화하세요.`,
+            `- 글의 톤·말투·격식·금지어는 기존 본문과 동일하게 유지하세요.`,
+            `- 확인되지 않은 시설·프로그램·수치·가격을 지어내지 마세요(없는 사실 날조 금지). 확실한 것의 디테일·독자 관점·일반적 정황으로 자연스럽게 채우세요.`,
+            `- 제목(#)·인사말·마무리 CTA·이미지 마커(<!-- IMG -->)는 넣지 마세요. 오직 새 ## 섹션 본문만 출력.`,
+            ``,
+            `**기존 본문 (참고용 — 다시 출력하지 마세요)**:`,
+            "```markdown",
+            rawBody,
+            "```",
+            ``,
+            `이어질 새 ## 섹션들의 Markdown만 출력하세요.`,
+          ].join("\n"),
+        },
+      ],
+    });
+    const add = more.text
+      .trim()
+      .replace(/^```(?:markdown)?/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    inTokens += more.inputTokens;
+    outTokens += more.outputTokens;
+    costCents += more.costCents;
+    if (noWs(add) < 80) break; // 모델이 새 내용을 못 만들면 직전 최선값 유지하고 중단
+    rawBody = `${rawBody.trimEnd()}\n\n${add}`;
+    cur = noWs(rawBody);
+  }
+  return { bodyMd: rawBody, inTokens, outTokens, costCents };
+}
+
+/**
+ * 정보 부족 시 대화형 보강 루프의 요청 신호.
+ * 억지 생성 대신 "이런 정보를 더 달라"고 되물을 때 던진다 — 서버 액션이 잡아 폼에 안내를 돌려주고,
+ * 사용자가 추가 입력하면 supplements(누적)에 얹어 재호출한다. 누적 정보는 라운드마다 유지된다.
+ */
+export class NeedsMoreInfoError extends Error {
+  requestMessage: string;
+  missingFields: string[];
+  supplements: string[];
+  constructor(requestMessage: string, missingFields: string[], supplements: string[]) {
+    super(requestMessage);
+    this.name = "NeedsMoreInfoError";
+    this.requestMessage = requestMessage;
+    this.missingFields = missingFields;
+    this.supplements = supplements;
+  }
+}
+
+export type AugmentArg = {
+  /** 지금까지 누적된 이전 라운드 입력들(폼이 hidden 필드로 되돌려 준다). */
+  supplements?: string[];
+  /** 이번 라운드에 새로 받은 추가 입력. */
+  newSupplement?: string;
+};
+
+/**
+ * 이번 라운드 입력을 누적에 병합하고 '진전 여부'를 판정한다([B] 무한 요청 방지).
+ * 진전이 있으면 누적하고 계속 되묻고, 없으면(공백/무의미/직전과 동일) stalled=true 로
+ * 되묻기를 멈춘다(호출부는 누적 정보만으로 최선 생성 + 한계 고지).
+ */
+function mergeAugment(augment?: AugmentArg): { supplements: string[]; stalled: boolean } {
+  const prior = (augment?.supplements ?? []).filter((s) => s && s.trim());
+  const incoming = augment?.newSupplement?.trim();
+  if (!incoming) return { supplements: prior, stalled: false };
+  const prog = assessSupplementProgress(prior, incoming);
+  if (prog.progressed) return { supplements: [...prior, incoming], stalled: false };
+  return { supplements: prior, stalled: true };
+}
+
+/**
  * 시스템 프롬프트 = 서비스 전체 공통 가이드(최우선) + 블로그 페르소나.
  * 모든 초안 생성/재작성이 이걸 써서, 전역 규칙이 페르소나보다 우선 적용된다.
  */
@@ -132,6 +312,8 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
     forbiddenWords: JSON.parse(p.forbiddenWordsJson || "[]"),
     ctas: JSON.parse(p.callsToActionJson || "[]"),
     qualityRules: JSON.parse(p.qualityRulesJson || "[]"),
+    facilities: JSON.parse(p.facilitiesJson || "[]"),
+    absentFacilities: JSON.parse(p.absentFacilitiesJson || "[]"),
     sampleSnippets: JSON.parse(p.sampleSnippetsJson || "[]"),
     preferredLengthMin: p.preferredLengthMin,
     preferredLengthMax: p.preferredLengthMax,
@@ -145,7 +327,11 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
    PUBLIC ENTRY POINTS
    ============================================================ */
 
-export async function generateDraftForBlog(blogId: string, callerUserId?: string) {
+export async function generateDraftForBlog(
+  blogId: string,
+  callerUserId?: string,
+  augment?: AugmentArg
+) {
   const blog = await db.query.blogs.findFirst({
     where: eq(schema.blogs.id, blogId),
     with: { personas: true },
@@ -155,7 +341,33 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
     blog.personas.find((p) => p.isActive) ?? blog.personas[0];
   if (!activePersona) throw new Error("PERSONA_MISSING");
   const persona = personaFromRow(blog, activePersona);
-  const preamble = await buildSystemPreamble(persona);
+  const basePreamble = await buildSystemPreamble(persona);
+
+  /* 자동 경로의 목표 분량 = 페르소나 설정 범위의 중앙값.
+     WHY: 자동 경로는 목표 길이를 프롬프트에 넣기만 하고 max_tokens 상향·확장 재시도가 없어
+     단일 패스로 목표의 48~77%(로그 실측)만 산출됐다. 반자동/재작성 경로와 동일하게
+     목표를 정량화해 (1)프롬프트 주입 (2)토큰 천장 상향 (3)미달 시 확장 재시도를 건다.
+     중앙값을 쓰면 확장 하한(목표의 90%)이 페르소나 최소 분량 위로 떨어져 범위 안에 안착한다. */
+  const lengthTarget =
+    persona.preferredLengthMin > 0 && persona.preferredLengthMax > 0
+      ? Math.round((persona.preferredLengthMin + persona.preferredLengthMax) / 2)
+      : null;
+  /* 한국어(특히 gpt-4o 토크나이저)는 글자당 ~2토큰 + 마크업 오버헤드 → 기본 4096은 ~1700자에서
+     잘린다. 목표글자×2.2 + 여유로 천장을 잡아 절단을 막는다. */
+  const bodyMaxTokens = lengthTarget
+    ? Math.min(16000, Math.max(4096, Math.round(lengthTarget * 2.2) + 1200))
+    : undefined;
+
+  /* --- 대화형 보강 루프: 착수 전 정보 부족 판정(①②) ---
+     정보가 부족하고 아직 진전 여지가 있으면 억지 생성 대신 되묻는다(NeedsMoreInfoError).
+     진전 없이 종료(stalled)면 누적 정보만으로 최선 생성하고 한계를 고지한다. */
+  const { supplements, stalled } = mergeAugment(augment);
+  const preReport = assessInsufficiency(persona, { lengthTarget, supplements });
+  if (!preReport.sufficient && !stalled) {
+    throw new NeedsMoreInfoError(preReport.requestMessage, preReport.missingFields, supplements);
+  }
+  let limitationFlag = !preReport.sufficient && stalled ? limitationNotice(preReport.missingFields) : null;
+  const preamble = augmentedPreamble(basePreamble, supplements);
 
   /* --- Step 1: discover topic candidates (skip if any selected unused topic exists) --- */
   const recent = await db.query.drafts.findMany({
@@ -165,32 +377,60 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
   });
   const recentTitles = recent.map((r) => r.title);
 
-  const topicRes = await llm({
-    system: preamble,
-    messages: [
-      {
-        role: "user",
-        content: topicResearchPrompt({
-          persona,
-          recentTitles,
-          season: seasonForNow(),
-        }),
-      },
-    ],
-    callerUserId,
-  });
+  // 토픽 리서치 토큰은 재생성(날조 후보 전멸 시)까지 합산한다.
+  let topicInTokens = 0;
+  let topicOutTokens = 0;
+  let topicCostCents = 0;
+  type TopicCand = {
+    title: string;
+    angle: string;
+    primaryKeyword: string;
+    secondaryKeywords: string[];
+    rationale: string;
+    score: number;
+  };
+  const runTopicResearch = async (): Promise<TopicCand[]> => {
+    const r = await llm({
+      system: preamble,
+      messages: [
+        {
+          role: "user",
+          content: topicResearchPrompt({
+            persona,
+            recentTitles,
+            season: seasonForNow(),
+          }),
+        },
+      ],
+      callerUserId,
+    });
+    topicInTokens += r.inputTokens;
+    topicOutTokens += r.outputTokens;
+    topicCostCents += r.costCents;
+    return safeJson<TopicCand[]>(r.text) ?? [];
+  };
 
-  const topics =
-    safeJson<
-      Array<{
-        title: string;
-        angle: string;
-        primaryKeyword: string;
-        secondaryKeywords: string[];
-        rationale: string;
-        score: number;
-      }>
-    >(topicRes.text) ?? [];
+  const absent = persona.absentFacilities;
+  const isCleanTopic = (t: TopicCand) =>
+    findAbsentFacilityHits(
+      `${t.title}\n${t.angle ?? ""}\n${t.primaryKeyword} ${(t.secondaryKeywords ?? []).join(" ")}`,
+      absent
+    ).length === 0;
+
+  let topics = await runTopicResearch();
+  /* 없는 시설(수영장 등)을 참조하는 후보는 날조 세탁의 씨앗이므로 제거한다.
+     모든 후보가 오염됐으면 1회 재생성해 깨끗한 후보를 확보한다(그래도 전멸이면
+     프롬프트 제약에 맡기고 원본 유지 — 하위 단계 가이드가 재차 걸러낸다). */
+  if (absent.length && topics.length) {
+    let clean = topics.filter(isCleanTopic);
+    if (clean.length === 0) {
+      const retry = await runTopicResearch();
+      clean = retry.filter(isCleanTopic);
+      if (clean.length) topics = clean;
+    } else {
+      topics = clean;
+    }
+  }
 
   let topicRow: typeof schema.topicCandidates.$inferSelect | undefined;
   if (topics.length) {
@@ -246,6 +486,7 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
               topicRow!.secondaryKeywordsJson || "[]"
             ),
           },
+          lengthTarget: lengthTarget ?? undefined,
         }),
       },
     ],
@@ -269,6 +510,7 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
   const bodyRes = await llm({
     system: preamble,
     callerUserId,
+    maxTokens: bodyMaxTokens,
     messages: [
       {
         role: "user",
@@ -282,21 +524,66 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
             ),
           },
           outline,
+          lengthTarget: lengthTarget ?? undefined,
         }),
       },
     ],
   });
-  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 --- */
+  let rawBody = bodyRes.text.trim();
+  let bodyInTokens = bodyRes.inputTokens;
+  let bodyOutTokens = bodyRes.outputTokens;
+  let bodyCostCents = bodyRes.costCents;
+
+  /* --- Step 3.4: 목표 분량 미달 시 반복 확장 ---
+     단일 패스는 목표의 절반가량만 산출된다(로그 실측) → 반자동/재작성과 동일 확장 전략. */
+  if (lengthTarget && bodyRes.model !== "mock") {
+    const exp = await expandBodyToTarget({
+      rawBody,
+      lengthTarget,
+      preamble,
+      callerUserId,
+      maxTokens: bodyMaxTokens,
+    });
+    rawBody = exp.bodyMd;
+    bodyInTokens += exp.inTokens;
+    bodyOutTokens += exp.outTokens;
+    bodyCostCents += exp.costCents;
+  }
+
+  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 ---
+     목표 분량 글은 humanize가 분량을 깎지 못하도록 minChars(현재 95%) floor + max_tokens를 건다. */
+  const humMinChars = lengthTarget
+    ? Math.round(rawBody.replace(/\s+/g, "").length * 0.95)
+    : undefined;
   const hum = await humanizeBody({
-    bodyMd: bodyRes.text.trim(),
+    bodyMd: rawBody,
     title: topicRow!.title,
     preamble,
     callerUserId,
     model: bodyRes.model,
     brandName: persona.blogName,
     primaryKeyword: topicRow!.primaryKeyword,
+    minChars: humMinChars,
+    maxTokens: bodyMaxTokens,
   });
-  const bodyMd = hum.bodyMd;
+  /* --- Step 3.6: 발행 전 사실검증(fact-guard) — 근거 없는 구체 주장 걷어내기(업종 무관) ---
+     누적 보강 정보도 확정 근거에 포함해 정상 확장을 허용한다. */
+  const groundingText = buildGroundingText(persona, {
+    title: topicRow!.title,
+    primaryKeyword: topicRow!.primaryKeyword,
+    secondaryKeywords: JSON.parse(topicRow!.secondaryKeywordsJson || "[]"),
+    supplements,
+  });
+  const guard = await factGuardBody({
+    bodyMd: hum.bodyMd,
+    title: topicRow!.title,
+    groundingText,
+    preamble,
+    callerUserId,
+    model: bodyRes.model,
+    maxTokens: bodyMaxTokens,
+  });
+  const bodyMd = guard.bodyMd;
 
   /* --- Step 4: score --- */
   const seo = scoreSeo({
@@ -314,11 +601,39 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
   });
 
   const totalInTokens =
-    topicRes.inputTokens + outlineRes.inputTokens + bodyRes.inputTokens + hum.inTokens;
+    topicInTokens + outlineRes.inputTokens + bodyInTokens + hum.inTokens + guard.inTokens;
   const totalOutTokens =
-    topicRes.outputTokens + outlineRes.outputTokens + bodyRes.outputTokens + hum.outTokens;
+    topicOutTokens + outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens;
   const totalCostCents =
-    topicRes.costCents + outlineRes.costCents + bodyRes.costCents + hum.costCents;
+    topicCostCents + outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents;
+
+  /* 발행 전 게이트(업종 무관): 사실검증 후에도 근거 없는 구체 주장(가격·수치·연혁·수상·규모·없는시설)이
+     남았는지 결정론 검사해 플래그한다. 검수자가 카드에서 바로 인지하도록 seoIssues에 얹는다(비차단). */
+  const fabHits = findFabricationHits(
+    `${topicRow!.title}\n${bodyMd}`,
+    groundingText,
+    persona.absentFacilities
+  );
+
+  /* --- 대화형 보강 루프: 생성 중 폴백(③) ---
+     목표 하한 미달 + 근거 없는 확장이 factGuard에 걸려 정상 확장으로 못 채운 상태면
+     사실 소재 부족이 원인 → 진전 여지가 있으면 되묻고(초안 미저장), 진전 없으면 한계 고지 후 저장. */
+  if (
+    isLengthUnfillable({
+      reachedChars: bodyMd.replace(/\s+/g, "").length,
+      lengthTarget,
+      fabricationKinds: fabHits.map((h) => h.kind),
+    })
+  ) {
+    if (!stalled) {
+      const req = buildAugmentationRequest(
+        ["material"],
+        `현재 약 ${bodyMd.replace(/\s+/g, "").length}자까지 썼지만 목표 분량을 근거 있는 내용으로 채우기엔 사실 소재가 부족합니다.`
+      );
+      throw new NeedsMoreInfoError(req, ["material"], supplements);
+    }
+    limitationFlag = limitationFlag ?? limitationNotice(["material"]);
+  }
 
   /* --- Step 5: persist draft --- */
   const [draft] = await db
@@ -334,9 +649,16 @@ export async function generateDraftForBlog(blogId: string, callerUserId?: string
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
       seoScore: seo.score,
-      seoIssuesJson: JSON.stringify(
-        seo.checks.filter((c) => !c.ok).map((c) => c.label)
-      ),
+      seoIssuesJson: JSON.stringify([
+        ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
+        ...(guard.removed.length
+          ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
+          : []),
+        ...(fabHits.length
+          ? [`⚠️ 미검증 주장 잔존: ${fabHits.map((h) => h.match).join(", ")} (사실 확인 필요)`]
+          : []),
+        ...(limitationFlag ? [limitationFlag] : []),
+      ]),
       humanScore: human.score,
       llmModel: bodyRes.model,
       llmInputTokens: totalInTokens,
@@ -404,6 +726,8 @@ export async function generateDraftFromBrief(opts: {
   photoMode: "manual" | "auto";
   /** photoMode='manual'일 때 폼에서 첨부된 이미지(이미 읽은 버퍼). */
   uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string }>;
+  /** 대화형 보강 루프 — 누적된 이전 라운드 입력 + 이번 라운드 새 입력. */
+  augment?: AugmentArg;
 }) {
   const blog = await db.query.blogs.findFirst({
     where: eq(schema.blogs.id, opts.blogId),
@@ -414,7 +738,7 @@ export async function generateDraftFromBrief(opts: {
     blog.personas.find((p) => p.isActive) ?? blog.personas[0];
   if (!activePersona) throw new Error("PERSONA_MISSING");
   const persona = personaFromRow(blog, activePersona);
-  const preamble = await buildSystemPreamble(persona);
+  const basePreamble = await buildSystemPreamble(persona);
 
   const title = opts.title.trim();
   const brief = opts.brief.trim();
@@ -433,6 +757,17 @@ export async function generateDraftFromBrief(opts: {
   const bodyMaxTokens = lengthTarget
     ? Math.min(16000, Math.max(4096, Math.round(lengthTarget * 2.2) + 1200))
     : undefined;
+
+  /* --- 대화형 보강 루프: 착수 전 정보 부족 판정(①②) ---
+     반자동은 사용자가 직접 입력한 brief 도 근거·소재로 함께 본다. 부족하고 진전 여지가 있으면
+     되묻고(NeedsMoreInfoError), 진전 없이 종료(stalled)면 누적 정보만으로 최선 생성 + 한계 고지. */
+  const { supplements, stalled } = mergeAugment(opts.augment);
+  const preReport = assessInsufficiency(persona, { lengthTarget, userBrief: brief, supplements });
+  if (!preReport.sufficient && !stalled) {
+    throw new NeedsMoreInfoError(preReport.requestMessage, preReport.missingFields, supplements);
+  }
+  let limitationFlag = !preReport.sufficient && stalled ? limitationNotice(preReport.missingFields) : null;
+  const preamble = augmentedPreamble(basePreamble, supplements);
 
   /* --- Step 1 대체: 사용자 지정 주제를 topicCandidate로 기록 --- */
   const [topicRow] = await db
@@ -502,50 +837,19 @@ export async function generateDraftFromBrief(opts: {
   let bodyOutTokens = bodyRes.outputTokens;
   let bodyCostCents = bodyRes.costCents;
 
-  /* --- Step 3.4: 명시 길이 미달 시 반복 확장(최대 2회) ---
-     WHY: 모델이 큰 분량을 단일 패스로 잘 안 따른다. 직전 본문을 입력으로 같은 목표를 다시 걸어
-     목표의 90%에 도달하거나 더 이상 안 늘면 중단한다(반려 재작성 경로와 동일 전략). */
+  /* --- Step 3.4: 명시 길이 미달 시 반복 확장(자동 경로와 공유 헬퍼) --- */
   if (lengthTarget) {
-    let cur = rawBody.replace(/\s+/g, "").length;
-    // 큰 확장 목표(갭 ≥1000자)는 패스를 한 번 더 준다 — 더 안 늘면 아래에서 자동 중단되므로 비용 안전.
-    const maxPasses = lengthTarget - cur >= 1000 ? 3 : 2;
-    for (let pass = 0; pass < maxPasses && cur < lengthTarget * 0.9; pass++) {
-      const gap = lengthTarget - cur;
-      const addSections = Math.max(2, Math.round(gap / 500));
-      const more = await llm({
-        system: preamble,
-        callerUserId: opts.callerUserId,
-        maxTokens: bodyMaxTokens,
-        messages: [
-          {
-            role: "user",
-            content: [
-              `# 작업: 아래 본문을 목표 길이까지 확장`,
-              `현재 본문은 공백 제외 약 ${cur}자입니다. 사용자가 요청한 목표는 약 ${lengthTarget}자(±10%)이므로 약 ${gap}자를 더 써야 합니다.`,
-              `기존 내용·톤·말투·금지어·이미지 마커(<!-- IMG:slot=N -->)는 그대로 유지하고, 새로운 H2(##) 섹션을 ${addSections}개 이상 추가하거나 기존 섹션에 구체 정보를 덧붙여 자연스럽게 늘리세요. 같은 말 반복·군더더기는 금지. 페르소나 기본 길이 상한은 이 글에 한해 무시합니다.`,
-              `제목(#)은 쓰지 말고 H2(##)부터. Markdown 본문만 출력.`,
-              ``,
-              `**현재 본문**:`,
-              "```markdown",
-              rawBody,
-              "```",
-            ].join("\n"),
-          },
-        ],
-      });
-      const next = more.text
-        .trim()
-        .replace(/^```(?:markdown)?/i, "")
-        .replace(/```\s*$/i, "")
-        .trim();
-      const nextChars = next.replace(/\s+/g, "").length;
-      bodyInTokens += more.inputTokens;
-      bodyOutTokens += more.outputTokens;
-      bodyCostCents += more.costCents;
-      if (nextChars <= cur * 1.02) break; // 더 안 늘면 직전 최선값 유지하고 중단
-      rawBody = next;
-      cur = nextChars;
-    }
+    const exp = await expandBodyToTarget({
+      rawBody,
+      lengthTarget,
+      preamble,
+      callerUserId: opts.callerUserId,
+      maxTokens: bodyMaxTokens,
+    });
+    rawBody = exp.bodyMd;
+    bodyInTokens += exp.inTokens;
+    bodyOutTokens += exp.outTokens;
+    bodyCostCents += exp.costCents;
   }
 
   /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 ---
@@ -564,7 +868,25 @@ export async function generateDraftFromBrief(opts: {
     minChars: humMinChars,
     maxTokens: bodyMaxTokens,
   });
-  const bodyMd = hum.bodyMd;
+  /* --- Step 3.6: 발행 전 사실검증(fact-guard) — 근거 없는 구체 주장 걷어내기(업종 무관) ---
+     반자동은 사용자가 직접 입력한 brief 도 확정 사실 근거에 포함한다. */
+  const groundingText = buildGroundingText(persona, {
+    title,
+    primaryKeyword,
+    secondaryKeywords,
+    userBrief: brief,
+    supplements,
+  });
+  const guard = await factGuardBody({
+    bodyMd: hum.bodyMd,
+    title,
+    groundingText,
+    preamble,
+    callerUserId: opts.callerUserId,
+    model: bodyRes.model,
+    maxTokens: bodyMaxTokens,
+  });
+  const bodyMd = guard.bodyMd;
 
   /* --- Step 4: score --- */
   const seo = scoreSeo({
@@ -580,9 +902,29 @@ export async function generateDraftFromBrief(opts: {
   });
   const human = scoreHuman({ bodyMd, forbiddenWords: persona.forbiddenWords });
 
-  const totalInTokens = outlineRes.inputTokens + bodyInTokens + hum.inTokens;
-  const totalOutTokens = outlineRes.outputTokens + bodyOutTokens + hum.outTokens;
-  const totalCostCents = outlineRes.costCents + bodyCostCents + hum.costCents;
+  const fabHits = findFabricationHits(`${title}\n${bodyMd}`, groundingText, persona.absentFacilities);
+
+  /* --- 대화형 보강 루프: 생성 중 폴백(③) --- */
+  if (
+    isLengthUnfillable({
+      reachedChars: bodyMd.replace(/\s+/g, "").length,
+      lengthTarget,
+      fabricationKinds: fabHits.map((h) => h.kind),
+    })
+  ) {
+    if (!stalled) {
+      const req = buildAugmentationRequest(
+        ["material"],
+        `현재 약 ${bodyMd.replace(/\s+/g, "").length}자까지 썼지만 목표 분량을 근거 있는 내용으로 채우기엔 사실 소재가 부족합니다.`
+      );
+      throw new NeedsMoreInfoError(req, ["material"], supplements);
+    }
+    limitationFlag = limitationFlag ?? limitationNotice(["material"]);
+  }
+
+  const totalInTokens = outlineRes.inputTokens + bodyInTokens + hum.inTokens + guard.inTokens;
+  const totalOutTokens = outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens;
+  const totalCostCents = outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents;
 
   /* --- Step 5: persist draft --- */
   const [draft] = await db
@@ -598,7 +940,16 @@ export async function generateDraftFromBrief(opts: {
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
       seoScore: seo.score,
-      seoIssuesJson: JSON.stringify(seo.checks.filter((c) => !c.ok).map((c) => c.label)),
+      seoIssuesJson: JSON.stringify([
+        ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
+        ...(guard.removed.length
+          ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
+          : []),
+        ...(fabHits.length
+          ? [`⚠️ 미검증 주장 잔존: ${fabHits.map((h) => h.match).join(", ")} (사실 확인 필요)`]
+          : []),
+        ...(limitationFlag ? [limitationFlag] : []),
+      ]),
       humanScore: human.score,
       llmModel: bodyRes.model,
       llmInputTokens: totalInTokens,

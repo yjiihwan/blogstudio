@@ -22,6 +22,8 @@ export type PersonaEditorValues = {
   focusKeywords: string[];
   forbiddenWords: string[];
   ctas: string[];
+  facilities: string[];
+  absentFacilities: string[];
   preferredLengthMin: number;
   preferredLengthMax: number;
   imagesPerPostMin: number;
@@ -262,6 +264,32 @@ export function PersonaEditor({
             tone="neutral"
             placeholder="글 말미에 자연스럽게 들어갈 안내 문구"
           />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="facilities">제공 시설·프로그램 (확정)</Label>
+          <ChipsInput
+            name="facilities"
+            defaultValue={persona.facilities}
+            tone="neutral"
+            placeholder="예: 웨이트, 머신, GX, 1:1 PT…"
+          />
+          <Hint>
+            실제로 제공하는 시설·프로그램만 적으세요. AI는 이 목록 안에서만 시설을
+            언급합니다.
+          </Hint>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="absentFacilities">없는 시설 (언급 금지)</Label>
+          <ChipsInput
+            name="absentFacilities"
+            defaultValue={persona.absentFacilities}
+            tone="neutral"
+            placeholder="예: 수영장, 수영, 사우나, 스파, 골프…"
+          />
+          <Hint>
+            없는데 오해할 수 있는 시설을 적으면, AI가 주제·제목·본문에 지어내지
+            못하도록 막고 발행 전 검출합니다.
+          </Hint>
         </div>
       </Section>
 

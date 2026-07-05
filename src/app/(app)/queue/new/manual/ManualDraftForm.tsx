@@ -138,8 +138,25 @@ export function ManualDraftForm({
         )}
       </div>
 
-      {state?.error && (
+      {state && "error" in state && (
         <p className="text-sm text-destructive">{state.error}</p>
+      )}
+
+      {/* 대화형 보강 루프 — 정보 부족 시 되묻기. 누적 정보를 hidden으로 되돌리고 추가 입력을 받는다. */}
+      {state && "needsInfo" in state && (
+        <div className="rounded-lg border border-accent-300 bg-accent-50 p-4">
+          <input type="hidden" name="supplements" value={JSON.stringify(state.supplements)} />
+          <p className="whitespace-pre-wrap text-sm text-ink-700">{state.request}</p>
+          <Textarea
+            name="supplement"
+            rows={5}
+            placeholder="추가 정보를 자유롭게 적어주세요. 이전에 주신 내용까지 모두 합쳐 다시 씁니다. (더 줄 정보가 없으면 빈칸으로 다시 생성 → 있는 정보만으로 최선을 다합니다)"
+            className="mt-3"
+          />
+          <p className="mt-1.5 text-xs text-ink-500">
+            지금까지 받은 보강 정보 {state.supplements.length}건이 누적되어 있습니다.
+          </p>
+        </div>
       )}
 
       <div className="flex items-center gap-3">

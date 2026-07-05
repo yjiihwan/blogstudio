@@ -57,6 +57,12 @@ function readPayload(formData: FormData) {
         .getAll("qualityRules")
         .map(String)
         .filter(Boolean),
+      // 시설 팩트: 있는 것 / 없는 것(수영장·사우나 등) — 날조 방지 근거
+      facilities: formData.getAll("facilities").map(String).filter(Boolean),
+      absentFacilities: formData
+        .getAll("absentFacilities")
+        .map(String)
+        .filter(Boolean),
       preferredLengthMin: Number(formData.get("preferredLengthMin") ?? 1500),
       preferredLengthMax: Number(formData.get("preferredLengthMax") ?? 2800),
       imagesPerPostMin: Number(formData.get("imagesPerPostMin") ?? 3),
@@ -100,6 +106,8 @@ export async function createBlogAction(formData: FormData) {
     forbiddenWordsJson: JSON.stringify(persona.forbiddenWords),
     callsToActionJson: JSON.stringify(persona.ctas),
     qualityRulesJson: JSON.stringify(persona.qualityRules),
+    facilitiesJson: JSON.stringify(persona.facilities),
+    absentFacilitiesJson: JSON.stringify(persona.absentFacilities),
     sampleSnippetsJson: JSON.stringify(persona.sampleSnippets),
     preferredLengthMin: persona.preferredLengthMin,
     preferredLengthMax: persona.preferredLengthMax,
@@ -150,6 +158,8 @@ export async function updateBlogAction(formData: FormData) {
     forbiddenWordsJson: JSON.stringify(persona.forbiddenWords),
     callsToActionJson: JSON.stringify(persona.ctas),
     qualityRulesJson: JSON.stringify(persona.qualityRules),
+    facilitiesJson: JSON.stringify(persona.facilities),
+    absentFacilitiesJson: JSON.stringify(persona.absentFacilities),
     sampleSnippetsJson: JSON.stringify(persona.sampleSnippets),
     preferredLengthMin: persona.preferredLengthMin,
     preferredLengthMax: persona.preferredLengthMax,

@@ -99,6 +99,10 @@ export default async function BlogEditPage({
           focusKeywords: persona ? JSON.parse(persona.focusKeywordsJson) : [],
           forbiddenWords: persona ? JSON.parse(persona.forbiddenWordsJson) : [],
           ctas: persona ? JSON.parse(persona.callsToActionJson) : [],
+          facilities: persona ? JSON.parse(persona.facilitiesJson || "[]") : [],
+          absentFacilities: persona
+            ? JSON.parse(persona.absentFacilitiesJson || "[]")
+            : [],
           qualityRules: persona ? JSON.parse(persona.qualityRulesJson) : [],
           sampleSnippets: persona
             ? JSON.parse(persona.sampleSnippetsJson)

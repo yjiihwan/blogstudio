@@ -9,7 +9,11 @@ import {
   getAccessibleDraft,
   requireUser,
 } from "@/lib/auth";
-import { reviseDraftWithFeedback, UserApiKeyMissingError } from "@/lib/pipeline";
+import {
+  reviseDraftWithFeedback,
+  UserApiKeyMissingError,
+  NeedsMoreInfoError,
+} from "@/lib/pipeline";
 import {
   CreditExhaustedError,
   ApiKeyUndecryptableError,
@@ -171,7 +175,28 @@ export async function generateNewDraftAction(formData: FormData) {
   }
 }
 
-export type GenerateDraftState = { error: string } | null;
+export type GenerateDraftState =
+  | { error: string }
+  // 대화형 보강 루프 — 정보가 부족해 되묻는 상태. 폼이 이 안내를 보여주고,
+  // 사용자가 추가 입력하면 supplements(누적)를 hidden 필드로 되돌려 재요청한다.
+  | { needsInfo: true; request: string; supplements: string[] }
+  | null;
+
+/** 폼에서 보강 루프 입력(누적 supplements JSON + 이번 라운드 새 입력)을 읽는다. */
+function readAugment(formData: FormData): { supplements: string[]; newSupplement?: string } {
+  let supplements: string[] = [];
+  try {
+    const raw = String(formData.get("supplements") ?? "");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) supplements = parsed.filter((s): s is string => typeof s === "string");
+    }
+  } catch {
+    supplements = [];
+  }
+  const newSupplement = String(formData.get("supplement") ?? "").trim() || undefined;
+  return { supplements, newSupplement };
+}
 
 export async function generateNewDraftActionState(
   _prevState: GenerateDraftState,
@@ -183,14 +208,19 @@ export async function generateNewDraftActionState(
   if (!(await getAccessibleBlog(blogId, user)))
     return { error: "권한이 없습니다." };
 
+  const augment = readAugment(formData);
+
   let draftId: string;
   try {
     const { generateDraftForBlog } = await import("@/lib/pipeline");
-    const draft = await generateDraftForBlog(blogId, user.id);
+    const draft = await generateDraftForBlog(blogId, user.id, augment);
     revalidatePath("/queue");
     revalidatePath("/dashboard");
     draftId = draft.id;
   } catch (err) {
+    if (err instanceof NeedsMoreInfoError) {
+      return { needsInfo: true, request: err.requestMessage, supplements: err.supplements };
+    }
     if (
       err instanceof CreditExhaustedError ||
       err instanceof UserApiKeyMissingError
@@ -247,6 +277,8 @@ export async function generateManualDraftActionState(
     }
   }
 
+  const augment = readAugment(formData);
+
   let draftId: string;
   try {
     const { generateDraftFromBrief } = await import("@/lib/pipeline");
@@ -258,11 +290,15 @@ export async function generateManualDraftActionState(
       keywords,
       photoMode,
       uploadedImages,
+      augment,
     });
     revalidatePath("/queue");
     revalidatePath("/dashboard");
     draftId = draft.id;
   } catch (err) {
+    if (err instanceof NeedsMoreInfoError) {
+      return { needsInfo: true, request: err.requestMessage, supplements: err.supplements };
+    }
     if (err instanceof CreditExhaustedError || err instanceof UserApiKeyMissingError) {
       return { error: err.message };
     }
