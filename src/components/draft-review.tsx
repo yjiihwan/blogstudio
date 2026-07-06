@@ -86,13 +86,36 @@ export function DraftReview(p: ReviewProps) {
   const html = renderMarkdown(body, imgMap);
   const readyImageCount = Object.keys(p.imageUrls).length;
 
+  // WHY: startTransition 안에서 서버 액션이 throw하면(프로덕션 버전 스큐 /
+  // 모바일 웹뷰 요청 중단 ECONNRESET) 에러가 그대로 전파돼 인앱 웹뷰가
+  // native "This page couldn't load" 죽은화면을 띄운다. try/catch로 흡수해
+  // 앱 안 배너로 돌리고, 스큐로 보이면 하드 리로드로 자동 복구한다.
+  function runAction(action: (fd: FormData) => Promise<unknown>, fd: FormData) {
+    setActionError(null);
+    startTransition(async () => {
+      try {
+        await action(fd);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/Failed to find Server Action|Server Action|deployment/i.test(msg)) {
+          // 스큐: 최신 클라이언트 번들을 받아 재시도하도록 새로고침.
+          window.location.reload();
+          return;
+        }
+        setActionError(
+          "요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요."
+        );
+      }
+    });
+  }
+
   async function doSave() {
     const fd = new FormData();
     fd.set("draftId", p.draftId);
     fd.set("title", title);
     fd.set("summary", summary);
     fd.set("bodyMd", body);
-    startTransition(() => p.saveDraft(fd));
+    runAction(p.saveDraft, fd);
   }
 
   async function doApprove() {
@@ -101,7 +124,7 @@ export function DraftReview(p: ReviewProps) {
     fd.set("title", title);
     fd.set("summary", summary);
     fd.set("bodyMd", body);
-    startTransition(() => p.approveDraft(fd));
+    runAction(p.approveDraft, fd);
   }
 
   async function doReject() {
@@ -150,7 +173,7 @@ export function DraftReview(p: ReviewProps) {
   async function markPub() {
     const fd = new FormData();
     fd.set("draftId", p.draftId);
-    startTransition(() => p.markPublished(fd));
+    runAction(p.markPublished, fd);
   }
 
   return (
@@ -451,6 +474,11 @@ export function DraftReview(p: ReviewProps) {
                   <ExternalLink className="size-4" />
                   발행 완료로 표시
                 </Button>
+                {actionError && (
+                  <div className="rounded bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                    {actionError}
+                  </div>
+                )}
                 <p className="text-[11px] text-ink-400 mt-1 leading-relaxed">
                   네이버 에디터가 새 탭으로 열립니다. 본문 영역에 그대로
                   붙여넣고, 이미지는 슬롯 번호에 맞춰 직접 첨부해주세요.
