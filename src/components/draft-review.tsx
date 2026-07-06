@@ -522,7 +522,9 @@ function Tab({
           ? "bg-paper-50 text-ink-900 shadow-sm border border-paper-300"
           : "text-ink-500 hover:text-ink-800"
       )}
-    />
+    >
+      {children}
+    </button>
   );
 }
 
