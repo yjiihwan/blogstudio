@@ -266,23 +266,53 @@ async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> 
     ...opts.messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
+  // 신형 모델(gpt-5.x)은 max_tokens 대신 max_completion_tokens를 쓰고, reasoning에
+  // 토큰을 소비하므로 넉넉히 잡아야 본문이 안 잘린다(작은 요청도 최소 1024 확보).
+  const maxOut = Math.max(opts.maxTokens ?? 12000, 1024);
+  // 추론형 모델(gpt-5.x / o-시리즈) 추론 강도. 실측 결과 창작 글쓰기에선 high와
+  // xhigh(최고) 퀄 차이가 사실상 없고 xhigh는 ~2배 느림·비쌈 → 기본 "high"(퀄 동일,
+  // 빠르고 저렴, prod 타임아웃 위험 ↓). 필요시 env OPENAI_REASONING_EFFORT=xhigh.
+  const isReasoning = /^(gpt-5|o[0-9])/.test(model);
+  const reasoning = isReasoning
+    ? { reasoning_effort: (process.env.OPENAI_REASONING_EFFORT ?? "high") as "high" | "xhigh" }
+    : {};
   let res: OpenAI.Chat.Completions.ChatCompletion;
   try {
     res = await client.chat.completions.create({
       model,
-      max_tokens: opts.maxTokens ?? 4096,
+      max_completion_tokens: maxOut,
+      ...reasoning,
       messages,
     });
   } catch (err) {
-    if (err instanceof OpenAI.APIError) {
+    // 일부 구모델은 max_completion_tokens를 모르고 max_tokens만 받는다 → 폴백.
+    if (
+      err instanceof OpenAI.APIError &&
+      /max_completion_tokens|max_tokens|unsupported_parameter|unknown_parameter/i.test(
+        `${err.code ?? ""} ${err.message}`
+      )
+    ) {
+      try {
+        res = await client.chat.completions.create({
+          model,
+          max_tokens: opts.maxTokens ?? 4096,
+          messages,
+        });
+      } catch (err2) {
+        if (err2 instanceof OpenAI.APIError && (err2.status === 429 || err2.status === 402))
+          throw new CreditExhaustedError();
+        throw err2;
+      }
+    } else if (err instanceof OpenAI.APIError) {
       console.error(
         `[llm] OpenAI 호출 실패 status=${err.status} code=${err.code ?? "?"} model=${model} keyMask=${maskKey(apiKey)} msg=${err.message}`
       );
       if (err.status === 429 || err.status === 402) throw new CreditExhaustedError();
+      throw err;
     } else {
       console.error(`[llm] OpenAI 호출 실패(비API에러):`, err);
+      throw err;
     }
-    throw err;
   }
 
   const text = res.choices[0]?.message?.content?.trim() ?? "";
