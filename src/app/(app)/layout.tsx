@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import { AppShell } from "@/components/app-shell";
+import { envBanner } from "@/lib/publish/mode";
 import {
   LayoutDashboard,
   FileEdit,
@@ -24,8 +25,16 @@ export default async function AppLayout({
 
   const h = await headers();
   const pathname = h.get("x-pathname") ?? "/dashboard";
+  const banner = envBanner();
 
   return (
+    <>
+      {banner?.show && (
+        <div className="fixed top-0 inset-x-0 z-[60] bg-amber-500 text-ink-900 text-center text-xs font-bold py-1.5 px-3 shadow">
+          🧪 {banner.label}
+        </div>
+      )}
+      <div className={banner?.show ? "pt-7" : undefined}>
     <AppShell
       currentPath={pathname}
       user={{ name: user.name, email: user.email, role: user.role }}
@@ -45,5 +54,7 @@ export default async function AppLayout({
     >
       {children}
     </AppShell>
+      </div>
+    </>
   );
 }

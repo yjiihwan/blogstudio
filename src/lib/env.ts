@@ -16,6 +16,10 @@ export const env = {
   ),
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? "",
   APP_URL: required("APP_URL", "http://localhost:3001"),
+  // 환경 분리(staging/prod) + 발행 dry-run 게이트. 상세 판별은 lib/publish/mode.ts.
+  BLOG_STUDIO_ENV: process.env.BLOG_STUDIO_ENV ?? "",
+  PUBLISH_DRY_RUN: process.env.PUBLISH_DRY_RUN ?? "",
+  BLOG_STUDIO_SKIP_SEED: process.env.BLOG_STUDIO_SKIP_SEED ?? "",
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
   ANTHROPIC_MODEL_DRAFT:
     process.env.ANTHROPIC_MODEL_DRAFT ?? "claude-sonnet-4-6",

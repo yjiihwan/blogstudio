@@ -2,6 +2,20 @@ import { db, schema } from "./client";
 import { hashPassword } from "@/lib/auth/passwords";
 
 async function main() {
+  // 파괴적 시드 가드 — prod 실데이터를 staging 시드가 덮어쓰지 못하게 한다(Sally SKIP_SEED 동형).
+  // 이 스크립트는 전 테이블 DELETE 후 재삽입하므로, prod/SKIP_SEED 환경에선 즉시 중단한다.
+  const skip = (process.env.BLOG_STUDIO_SKIP_SEED ?? "").trim();
+  const envName = (process.env.BLOG_STUDIO_ENV ?? "").trim().toLowerCase();
+  if (skip === "1" || skip.toLowerCase() === "true") {
+    throw new Error(
+      "BLOG_STUDIO_SKIP_SEED 설정됨 — 파괴적 시드를 거부합니다(실데이터 보호). 시드하려면 플래그를 해제하세요."
+    );
+  }
+  if (envName === "prod" || envName === "production") {
+    throw new Error(
+      "BLOG_STUDIO_ENV=prod — 프로덕션에서는 파괴적 시드를 실행하지 않습니다(실데이터 보호)."
+    );
+  }
   console.log("Seeding blog_studio…");
 
   await db.delete(schema.notifications);

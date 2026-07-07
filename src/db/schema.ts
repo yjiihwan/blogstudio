@@ -324,7 +324,9 @@ export const publishes = sqliteTable("publishes", {
     .notNull()
     .references(() => drafts.id, { onDelete: "cascade" }),
   publishedByUserId: text("published_by_user_id").references(() => users.id),
-  method: text("method", { enum: ["manual_paste", "open_api", "browser_auto"] })
+  method: text("method", {
+    enum: ["manual_paste", "open_api", "browser_auto", "dry_run"],
+  })
     .notNull()
     .default("manual_paste"),
   publishedAt: text("published_at"),
