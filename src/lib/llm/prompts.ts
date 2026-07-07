@@ -11,7 +11,7 @@ export type PersonaInput = {
   purpose: string;
   audience: string;
   brandVoice: string;
-  pointOfView: "first_person" | "third_person" | "expert";
+  pointOfView: "first_person" | "owner" | "third_person" | "expert";
   formality: "informal" | "neutral" | "formal";
   ageGroup?: string | null;
   gender?: string | null;
@@ -34,10 +34,12 @@ export type PersonaInput = {
 export function personaPreamble(p: PersonaInput) {
   const povLabel =
     p.pointOfView === "first_person"
-      ? "1인칭 경험담 — 글쓴이가 직접 겪은 듯이('제가 가보니', '~더라고요', '~었어요'). 광고 대행 티가 아니라 실제 경험·후기 톤."
-      : p.pointOfView === "expert"
-        ? "전문가 해설 — 근거와 정보 중심으로 차분하게 설명"
-        : "3인칭 관찰자 — 담담하게 소개·관찰";
+      ? "고객 1인칭 경험담 — 글쓴이가 직접 겪은 손님인 듯이('제가 가보니', '~더라고요', '~었어요'). 광고 대행 티가 아니라 실제 경험·후기 톤."
+      : p.pointOfView === "owner"
+        ? `운영자·직원 1인칭 — 글쓴이는 이 업체("${p.blogName}")를 직접 운영·근무하는 사람이다. 방문 고객 후기 톤이 절대 아니다. 모든 문장의 주어와 관점을 운영자로 끝까지 유지한다. 우리 시설·서비스를 소개·안내하는 톤으로: "저희 ${p.blogName}에서는~", "직접 준비했습니다", "이렇게 갖춰 두었어요", "이런 분들이 많이 찾아주세요", "찾아주시면 안내해 드릴게요". 금지 표현(고객·방문자 시점): "제가 가보니", "다녀왔어요", "방문해보니", "추천하고 싶어요", "인상적이었어요". 자기 업체를 남의 곳처럼 후기하듯 쓰지 마라.`
+        : p.pointOfView === "expert"
+          ? "전문가 해설 — 근거와 정보 중심으로 차분하게 설명"
+          : "3인칭 관찰자 — 담담하게 소개·관찰";
   const formalityLabel =
     p.formality === "informal"
       ? "친근체 — 해요체(~예요/~어요/~죠) 중심, 친구에게 말하듯 편하게"
@@ -562,11 +564,14 @@ export function outlinePrompt(opts: {
   userBrief?: string;
   /** 반자동 + 직접 업로드: 정확히 이 개수의 이미지 슬롯(slot 0..N-1)을 둔다. */
   imageSlotCount?: number;
+  /** 슬롯별 사진 설명(slot 0..N-1). 있으면 그 내용에 맞는 문단에 배치하도록 안내한다. */
+  imageLabels?: string[];
   /** 사용자가 명시한 목표 글자수(공백 제외). 있으면 페르소나 기본 분량보다 우선한다. */
   lengthTarget?: number;
 }) {
   const hasBrief = !!opts.userBrief?.trim();
   const fixedImages = typeof opts.imageSlotCount === "number";
+  const hasLabels = fixedImages && !!opts.imageLabels?.some((l) => l && l.trim());
   const lt = opts.lengthTarget && opts.lengthTarget > 0 ? opts.lengthTarget : null;
   return [
     `# 작업: 아래 주제로 글 구조(아웃라인) 만들기`,
@@ -592,9 +597,11 @@ export function outlinePrompt(opts: {
     lt
       ? `목표 길이: 공백 제외 약 ${lt}자(±10%) — 사용자 명시. 섹션 수와 각 섹션 분량을 이 목표에 맞춰 충분히 잡으세요(필요하면 H2 섹션을 더 늘려도 됩니다).`
       : `목표 길이: ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
-    fixedImages
-      ? `이미지: 사용자가 사진 ${opts.imageSlotCount}장을 직접 업로드했습니다. imagePlan에 정확히 ${opts.imageSlotCount}개의 슬롯(slot 0부터 ${Math.max(0, (opts.imageSlotCount ?? 0) - 1)}까지)을 만들고, 본문 흐름에 맞는 위치를 배정하세요. needsUserShot 은 모두 false(이미 업로드됨).`
-      : `목표 이미지 수: ${opts.persona.imagesPerPostMin}~${opts.persona.imagesPerPostMax}장`,
+    fixedImages && hasLabels
+      ? `이미지: 사용자가 사진 ${opts.imageSlotCount}장을 각각 설명과 함께 업로드했습니다. imagePlan에 정확히 ${opts.imageSlotCount}개의 슬롯을 만들되, **각 슬롯의 사진 내용에 맞는 섹션에 배정하세요 — 설명과 다른 주제의 문단에 넣지 마세요.** 각 imagePlan 항목의 description에 아래 사진 설명을 그대로 반영하고, needsUserShot은 모두 false.\n${(opts.imageLabels ?? []).map((l, i) => `  - slot ${i}: ${l && l.trim() ? l.trim() : "(설명 없음 — 순서상 위치)"}`).join("\n")}`
+      : fixedImages
+        ? `이미지: 사용자가 사진 ${opts.imageSlotCount}장을 직접 업로드했습니다. imagePlan에 정확히 ${opts.imageSlotCount}개의 슬롯(slot 0..${Math.max(0, (opts.imageSlotCount ?? 0) - 1)})을 만들고 **올린 순서(slot 0 → ${Math.max(0, (opts.imageSlotCount ?? 0) - 1)})대로 본문 위에서 아래로 순차 배치**하세요. needsUserShot 은 모두 false(이미 업로드됨).`
+        : `목표 이미지 수: ${opts.persona.imagesPerPostMin}~${opts.persona.imagesPerPostMax}장`,
     ``,
     `아웃라인 형식 (JSON):`,
     "```json",
@@ -627,12 +634,18 @@ export function bodyPrompt(opts: {
   outline: unknown;
   /** 반자동 모드: 사용자가 직접 지정한 내용 디테일. 있으면 반드시 충실히 반영. */
   userBrief?: string;
+  /** 슬롯별 사진 설명(slot 0..N-1). 있으면 그 내용에 맞는 문단에 마커를 배치하도록 강제한다. */
+  imageLabels?: string[];
   /** 사용자가 명시한 목표 글자수(공백 제외). 있으면 페르소나 기본 분량보다 우선한다. */
   lengthTarget?: number;
 }) {
   const hasBrief = !!opts.userBrief?.trim();
   const lt = opts.lengthTarget && opts.lengthTarget > 0 ? opts.lengthTarget : null;
   const bigTarget = lt && lt > (opts.persona.preferredLengthMax || 0) * 1.3;
+  const hasLabels = !!opts.imageLabels?.some((l) => l && l.trim());
+  const imageLabelBlock = hasLabels
+    ? `\n**사진 배치 (반드시 준수)**: 각 이미지 슬롯은 아래 사진 내용을 담고 있습니다. \`<!-- IMG:slot=N -->\` 마커를 **그 사진 내용과 같은 주제를 다루는 문단 바로 뒤**에 넣으세요. 사진 내용과 다른 문단에 넣으면 안 됩니다(예: 러닝머신 사진을 프리웨이트존 문단에 넣지 말 것).\n${(opts.imageLabels ?? []).map((l, i) => `  - slot ${i}: ${l && l.trim() ? l.trim() : "(설명 없음 — 순서상 위치)"}`).join("\n")}`
+    : "";
   return [
     `# 작업: 아래 아웃라인을 바탕으로 본문 작성`,
     ``,
@@ -657,12 +670,15 @@ export function bodyPrompt(opts: {
       ? `3. **본문 길이 (사용자 명시 — 반드시 충족, 페르소나 기본 분량보다 우선)**: 공백 제외 약 ${lt}자(±10%)로 작성하세요. 목표에 크게 못 미치면 미반영으로 간주합니다. 같은 말 반복·군더더기로 채우지 말고 구체 정보·사례·디테일을 더해 자연스럽게 채우세요.`
       : `3. 본문 ${opts.persona.preferredLengthMin}~${opts.persona.preferredLengthMax}자`,
     bigTarget
-      ? `3-1. **분량 확보 (중요)**: 목표 ${lt}자는 짧은 글이 아닙니다. 아웃라인의 각 H2 섹션을 공백 제외 400~600자로 충실히 채우세요. **단, 없는 사실을 지어내서 채우지 마라(규칙 0 최우선).** 확실하지 않은 구체 시설·프로그램·수치를 상상해 넣는 대신, 확실한 것에 대한 디테일·독자 관점·일반적 정황·이용 팁·자주 묻는 질문(단정 아닌 '확인해보세요' 톤)으로 자연스럽게 늘리세요. 채울 내용이 없으면 억지 분량보다 정확함을 택합니다.`
+      ? `3-1. **분량은 '요청한 내용의 밀도'로만 채운다.** 목표 ${lt}자를 맞추려고 **요청하지 않은 일반 조언·상식·팁·자주 묻는 질문을 끼워 넣지 마라.** (나쁜 예: 헬스장 소개 글에 "첫날은 동선부터 가볍게 보세요", "처음엔 기준을 낮게 잡으세요" 같은 운동 초보 팁 — 사용자가 요청하지 않았으면 넣지 않는다.) 늘릴 때는 **사용자 지정 내용·확정 시설/서비스·주제 자체**에 대한 구체 디테일·감각 묘사로만 자연스럽게 늘린다. 채울 소재가 없으면 **억지로 늘리지 말고 목표보다 짧게 끝내라 — 군더더기보다 짧고 정확한 글이 낫다.**`
+      : null,
+    hasBrief
+      ? `3-2. **요청 범위 밖 내용 금지.** 위 "사용자 지정 내용"에 없는 주제·조언·팁을 임의로 추가하지 마라. 사용자가 부탁한 내용과 업체 소개에만 집중한다. 분량이 남아도 관련 없는 일반론으로 채우지 않는다.`
       : null,
     `4. H2 2~4개, 필요시 H3 사용. 짧고 검색에 노출되는 표현으로`,
-    `5. 이미지 위치는 본문에 \`<!-- IMG:slot=0 -->\` 형식으로 표시 (slot은 아웃라인 imagePlan의 slot 번호)`,
+    `5. 이미지 위치는 본문에 \`<!-- IMG:slot=0 -->\` 형식으로 표시 (slot은 아웃라인 imagePlan의 slot 번호).${hasLabels ? " 아래 '사진 배치' 규칙에 따라 각 슬롯을 내용이 맞는 문단에 넣는다." : ""}`,
     `6. 사람이 쓴 것처럼 자연스럽게 — 같은 문장 구조 반복 회피, 문단 길이 변화`,
-    `7. **페르소나의 화법·격식·톤을 글 전체에 일관되게 유지.** 시스템 지침의 화법(예: 1인칭 경험담)을 끝까지 지킨다 — 공지·이벤트 글이라도 홍보 문구로 빠지지 말고, 1인칭이면 '제가 다니는/직접 본' 식으로 글쓴이 시점을 유지한다.`,
+    `7. **페르소나의 화법(화자가 누구인지)을 글 전체에 일관되게 유지 — 모든 문장의 주어·관점을 끝까지.** 시스템 지침의 화법이 '운영자·직원 1인칭'이면 자기 업체를 소개·안내하는 톤("저희 ${opts.persona.blogName}에서는~/직접 갖춰 두었어요/찾아주시면")으로 쓰고, 절대 방문 고객 후기 톤("제가 가보니/다녀왔어요/추천하고 싶어요")으로 빠지지 마라. '고객 1인칭'이면 반대로 방문 손님 경험담을 유지한다. 화자가 문단마다 바뀌면 미반영으로 간주.`,
     `8. 광고티 나는 표현 회피, 페르소나의 "금지어"는 절대 사용 안 함`,
     `9. 가격·정보는 "방문 시 기준" 같은 표현으로 변동 가능성 표시`,
     `10. 마지막에 CTA 1개 (페르소나의 CTA 목록 중 1개 자연스럽게 포함)`,
@@ -677,6 +693,7 @@ export function bodyPrompt(opts: {
     "```json",
     JSON.stringify(opts.outline, null, 2),
     "```",
+    imageLabelBlock || null,
     ``,
     `Markdown 본문만 출력하세요. 메타정보·해설·코드블록 표시 없이.`,
   ]

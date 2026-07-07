@@ -15,7 +15,7 @@ export type PersonaEditorValues = {
   purpose: string;
   audience: string;
   brandVoice: string;
-  pointOfView: "first_person" | "third_person" | "expert";
+  pointOfView: "first_person" | "owner" | "third_person" | "expert";
   formality: "informal" | "neutral" | "formal";
   ageGroup: string | null;
   gender: string | null;
@@ -169,7 +169,8 @@ export function PersonaEditor({
               value={pov}
               onChange={(v) => setPov(v as any)}
               options={[
-                { value: "first_person", label: "1인칭 (제가, 저는…)" },
+                { value: "first_person", label: "고객 1인칭 (제가 가보니…)" },
+                { value: "owner", label: "운영자·직원 (저희 매장에서…)" },
                 { value: "third_person", label: "3인칭 (담담한 관찰자)" },
                 { value: "expert", label: "전문가 (분석·해설)" },
               ]}

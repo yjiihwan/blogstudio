@@ -29,6 +29,7 @@ function readPayload(formData: FormData) {
       brandVoice: String(formData.get("brandVoice") ?? "").trim(),
       pointOfView: String(formData.get("pointOfView") ?? "first_person") as
         | "first_person"
+        | "owner"
         | "third_person"
         | "expert",
       formality: String(formData.get("formality") ?? "neutral") as

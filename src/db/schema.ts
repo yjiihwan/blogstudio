@@ -89,7 +89,7 @@ export const personas = sqliteTable("personas", {
   audience: text("audience"),                // 타겟 독자
   brandVoice: text("brand_voice"),           // 톤·말투
   pointOfView: text("point_of_view", {
-    enum: ["first_person", "third_person", "expert"],
+    enum: ["first_person", "owner", "third_person", "expert"],
   }).notNull().default("first_person"),
   formality: text("formality", {
     enum: ["informal", "neutral", "formal"],

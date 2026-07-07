@@ -783,8 +783,8 @@ export async function generateDraftFromBrief(opts: {
   brief: string;
   keywords?: string[];
   photoMode: "manual" | "auto";
-  /** photoMode='manual'일 때 폼에서 첨부된 이미지(이미 읽은 버퍼). */
-  uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string }>;
+  /** photoMode='manual'일 때 폼에서 첨부된 이미지(이미 읽은 버퍼). label=사진 설명(본문 배치용). */
+  uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string; label?: string }>;
   /** 대화형 보강 루프 — 누적된 이전 라운드 입력 + 이번 라운드 새 입력. */
   augment?: AugmentArg;
   /** 백그라운드 생성 — 이 초안 행(status="draft")을 채워 넣는다(INSERT 대신 UPDATE).
@@ -809,6 +809,11 @@ export async function generateDraftFromBrief(opts: {
   const secondaryKeywords = keywords.slice(1);
   const manualImages = opts.photoMode === "manual" ? (opts.uploadedImages ?? []) : [];
   const imageSlotCount = opts.photoMode === "manual" ? manualImages.length : undefined;
+  // 사진별 설명 라벨(slot 0..N-1) — 본문의 맞는 문단에 배치하도록 outline·body에 주입.
+  const imageLabels =
+    opts.photoMode === "manual" && manualImages.some((m) => m.label)
+      ? manualImages.map((m) => m.label ?? "")
+      : undefined;
 
   /* 사용자가 제목·브리프에 명시한 목표 글자수를 추출한다.
      WHY: 신규 작성 경로는 명시 길이를 파싱조차 안 하고 페르소나 기본 분량만 박아서
@@ -862,6 +867,7 @@ export async function generateDraftFromBrief(opts: {
           topic: { title, angle: topicRow.angle, primaryKeyword, secondaryKeywords },
           userBrief: brief,
           imageSlotCount,
+          imageLabels,
           lengthTarget: lengthTarget ?? undefined,
         }),
       },
@@ -892,6 +898,7 @@ export async function generateDraftFromBrief(opts: {
           topic: { title, primaryKeyword, secondaryKeywords },
           outline,
           userBrief: brief,
+          imageLabels,
           lengthTarget: lengthTarget ?? undefined,
         }),
       },
@@ -1057,7 +1064,7 @@ export async function generateDraftFromBrief(opts: {
         filePath: urlPath,
         mimeType: img.mimeType,
         fileSize: size,
-        sourceMetaJson: JSON.stringify({ slot: i }),
+        sourceMetaJson: JSON.stringify({ slot: i, label: img.label || undefined }),
       });
     }
   } else {
@@ -1183,7 +1190,7 @@ export async function startBriefGeneration(opts: {
   brief: string;
   keywords?: string[];
   photoMode: "manual" | "auto";
-  uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string }>;
+  uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string; label?: string }>;
   augment?: AugmentArg;
 }): Promise<StartGenerationResult> {
   const blog = await db.query.blogs.findFirst({
