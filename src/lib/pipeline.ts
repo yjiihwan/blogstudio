@@ -442,6 +442,7 @@ export async function generateDraftForBlog(
         },
       ],
       callerUserId,
+      reasoningEffort: "low", // 주제 후보 선정(구조적) — 프로즈 아님, 속도↑
     });
     topicInTokens += r.inputTokens;
     topicOutTokens += r.outputTokens;
@@ -529,6 +530,7 @@ export async function generateDraftForBlog(
         }),
       },
     ],
+    reasoningEffort: "low", // 아웃라인(구조적) — 프로즈 아님, 속도↑
   });
   const outline = safeJson<{
     hookParagraph: string;
@@ -846,6 +848,7 @@ export async function generateDraftFromBrief(opts: {
         }),
       },
     ],
+    reasoningEffort: "low", // 아웃라인(구조적) — 프로즈 아님, 속도↑
   });
   const outline = safeJson<{
     hookParagraph: string;

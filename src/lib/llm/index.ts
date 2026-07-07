@@ -75,6 +75,9 @@ export type LLMOptions = {
   mockResponder?: (msgs: LLMMessage[]) => string;
   /** If provided, resolves the API key and provider from this user's settings. */
   callerUserId?: string;
+  /** 추론형 모델(gpt-5.x) 추론 강도 override. 구조적 단계(주제·아웃라인)는 "low"로
+   *  낮춰 속도↑(프로즈 퀄 무관), 창작 단계(본문·사람화)는 기본(high) 유지. */
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh";
 };
 
 export type LLMResult = {
@@ -273,9 +276,8 @@ async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> 
   // xhigh(최고) 퀄 차이가 사실상 없고 xhigh는 ~2배 느림·비쌈 → 기본 "high"(퀄 동일,
   // 빠르고 저렴, prod 타임아웃 위험 ↓). 필요시 env OPENAI_REASONING_EFFORT=xhigh.
   const isReasoning = /^(gpt-5|o[0-9])/.test(model);
-  const reasoning = isReasoning
-    ? { reasoning_effort: (process.env.OPENAI_REASONING_EFFORT ?? "high") as "high" | "xhigh" }
-    : {};
+  const effort = opts.reasoningEffort ?? process.env.OPENAI_REASONING_EFFORT ?? "high";
+  const reasoning = isReasoning ? { reasoning_effort: effort as "low" | "medium" | "high" | "xhigh" } : {};
   let res: OpenAI.Chat.Completions.ChatCompletion;
   try {
     res = await client.chat.completions.create({
