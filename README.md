@@ -101,6 +101,34 @@ scripts/
 └── screenshot.ts               # puppeteer-core 자동 캡처
 ```
 
+## 글쓰기 스킬 파이프라인 (명세 — 엔진 배선 예정)
+
+초안 생성 후 "사람이 쓴 글"에 가깝게 다듬는 재작성 스킬 5종을 단계별 패스로 확장한다.
+각 스킬의 상세 명세(트리거/규칙/전후 예시/체크리스트/입출력)는 [`skills/`](./skills/README.md)에 있다.
+
+**확장 파이프라인 (권장 순서):**
+
+```
+초안 → storytelling → anti-ai → voice-dna → viral-hooks → dumbify → 채점(SEO/휴먼톤) → 검수
+```
+
+- 순서 근거: 구조 변경(storytelling)을 먼저 → storytelling이 넣는 서사 접속사 남발을 anti-ai가
+  바로 뒤에서 정리 → 톤(voice-dna) → 도입부 훅(viral-hooks) → 가독성(dumbify)을 맨 마지막.
+  자세한 근거는 [skills/README.md](./skills/README.md#확장된-생성-파이프라인-권장-순서).
+- 모든 스킬은 `{ draftMd, persona, options }` 를 받아 `{ revisedMd, changes, notes }` 를 돌려주는
+  동일 시그니처로 배선한다(입력=초안+옵션, 출력=수정본).
+- 상위 규칙(`src/lib/global-guide.ts`의 AI-티 금지·거짓 날조 금지)은 모든 스킬에 최우선 적용된다.
+
+| 스킬 | 역할 | 명세 |
+|---|---|---|
+| anti-ai | 'AI 티' 패턴 제거 | [skills/anti-ai.md](./skills/anti-ai.md) |
+| storytelling | 서사(그런데/그래서) 구조 부여 | [skills/storytelling.md](./skills/storytelling.md) |
+| voice-dna | 톤 DNA 적용(사용자 톤 우선/없으면 페르소나 자동추정) | [skills/voice-dna.md](./skills/voice-dna.md) |
+| viral-hooks | 첫 문장(훅) 강화 | [skills/viral-hooks.md](./skills/viral-hooks.md) |
+| dumbify | 쉬운 말로 재작성 | [skills/dumbify.md](./skills/dumbify.md) |
+
+> ⚠️ 현재는 **문서(명세) 단계**다. 엔진 코드 배선(각 패스를 `pipeline.ts`에 연결)은 다음 단계.
+
 ## 운영 진입 전 체크리스트
 
 - [ ] Anthropic API 키 등록 → 실 LLM 모드 전환
