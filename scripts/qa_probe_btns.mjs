@@ -1,0 +1,17 @@
+import puppeteer from "puppeteer-core";
+const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const BASE = "http://127.0.0.1:3001";
+const browser = await puppeteer.launch({ executablePath: CHROME, headless:"new", args:["--no-sandbox"] });
+const page = await browser.newPage();
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+await page.goto(`${BASE}/login`,{waitUntil:"networkidle0"});
+await page.type('input[name="email"]',"admin@blogstudio.local");
+await page.type('input[name="password"]',"studio1234!");
+await Promise.all([page.click('button[type="submit"]'),page.waitForNavigation({waitUntil:"networkidle0"}).catch(()=>{})]);
+await page.goto(`${BASE}/queue/qa_d_02_review_long`,{waitUntil:"networkidle0"});
+await sleep(1500);
+const btns = await page.evaluate(()=>[...document.querySelectorAll('button')].map(b=>JSON.stringify((b.textContent||'').trim()).slice(0,40)));
+console.log("BUTTONS:", btns.join(" | "));
+const hasTitle = await page.evaluate(()=>!!document.querySelector('#title'));
+console.log("has #title now(preview):", hasTitle);
+await browser.close();

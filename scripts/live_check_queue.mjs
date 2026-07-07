@@ -1,0 +1,20 @@
+import puppeteer from "puppeteer-core";
+const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const BASE = "https://blogstudio-ide.asia";
+const OUT = "/Users/ideagent/shared_inbox/results/blogstudio_augment_deploy_20260705";
+const browser = await puppeteer.launch({ executablePath: CHROME, headless: "new", args: ["--no-sandbox", "--window-size=1360,1700"] });
+const page = await browser.newPage();
+await page.setViewport({ width: 1360, height: 1700 });
+await page.goto(`${BASE}/login`, { waitUntil: "networkidle0" });
+await page.type('input[name="email"]', "admin@blogstudio.local");
+await page.type('input[name="password"]', "studio1234!");
+await Promise.all([page.click('button[type="submit"]'), page.waitForNavigation({ waitUntil: "networkidle0" }).catch(()=>{})]);
+await page.goto(`${BASE}/queue`, { waitUntil: "networkidle0" });
+await new Promise((r) => setTimeout(r, 1000));
+await page.screenshot({ path: `${OUT}/queue_list.png`, fullPage: true });
+const t = await page.evaluate(() => document.body.innerText);
+console.log(t.slice(0, 2500));
+// 세션 만료(JWT) 값 확인
+const cookies = await page.cookies();
+console.log("\n[cookies]", cookies.map(c => `${c.name}(exp:${c.expires})`).join(", "));
+await browser.close();
