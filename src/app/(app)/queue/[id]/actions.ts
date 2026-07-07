@@ -12,7 +12,6 @@ import {
 import {
   reviseDraftWithFeedback,
   UserApiKeyMissingError,
-  NeedsMoreInfoError,
 } from "@/lib/pipeline";
 import {
   CreditExhaustedError,
@@ -222,15 +221,17 @@ export async function generateNewDraftActionState(
 
   let draftId: string;
   try {
-    const { generateDraftForBlog } = await import("@/lib/pipeline");
-    const draft = await generateDraftForBlog(blogId, user.id, augment);
+    // 백그라운드 생성 착수 — 정보 부족이면 되묻고, 아니면 placeholder 즉시 생성 후 반환(타임아웃 방지).
+    const { startAutoGeneration } = await import("@/lib/pipeline");
+    const res = await startAutoGeneration(blogId, user.id, augment);
+    if ("needsInfo" in res) {
+      return { needsInfo: true, request: res.request, supplements: res.supplements };
+    }
     revalidatePath("/queue");
     revalidatePath("/dashboard");
-    draftId = draft.id;
+    draftId = res.draftId;
   } catch (err) {
-    if (err instanceof NeedsMoreInfoError) {
-      return { needsInfo: true, request: err.requestMessage, supplements: err.supplements };
-    }
+    // 착수 전(preflight) 에러만 여기 도달. 생성 본작업 에러는 백그라운드에서 초안 상태로 표시된다.
     if (
       err instanceof CreditExhaustedError ||
       err instanceof UserApiKeyMissingError
@@ -274,16 +275,18 @@ export async function generateManualDraftActionState(
     .filter(Boolean);
   const photoMode = String(formData.get("photoMode") ?? "auto") === "manual" ? "manual" : "auto";
 
-  // 직접 첨부 사진 읽기
-  const uploadedImages: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string }> = [];
+  // 직접 첨부 사진 읽기 (사진별 설명 라벨을 같은 순서로 매칭 — 본문 배치용)
+  const photoLabels = formData.getAll("photoLabel").map((l) => String(l).trim());
+  const uploadedImages: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string; label?: string }> = [];
   if (photoMode === "manual") {
     const files = formData.getAll("photos").filter((f): f is File => f instanceof File && f.size > 0);
-    for (const file of files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
       if (file.size > MANUAL_MAX_IMG) return { error: `사진이 너무 큽니다(최대 10MB): ${file.name}` };
       if (!MANUAL_ALLOWED.has(file.type)) return { error: `지원하지 않는 형식: ${file.name} (JPG/PNG/HEIC/WebP)` };
       const buffer = Buffer.from(await file.arrayBuffer());
       const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
-      uploadedImages.push({ buffer, mimeType: file.type, size: file.size, ext });
+      uploadedImages.push({ buffer, mimeType: file.type, size: file.size, ext, label: photoLabels[i] || undefined });
     }
   }
 
@@ -291,8 +294,8 @@ export async function generateManualDraftActionState(
 
   let draftId: string;
   try {
-    const { generateDraftFromBrief } = await import("@/lib/pipeline");
-    const draft = await generateDraftFromBrief({
+    const { startBriefGeneration } = await import("@/lib/pipeline");
+    const res = await startBriefGeneration({
       blogId,
       callerUserId: user.id,
       title,
@@ -302,13 +305,13 @@ export async function generateManualDraftActionState(
       uploadedImages,
       augment,
     });
+    if ("needsInfo" in res) {
+      return { needsInfo: true, request: res.request, supplements: res.supplements };
+    }
     revalidatePath("/queue");
     revalidatePath("/dashboard");
-    draftId = draft.id;
+    draftId = res.draftId;
   } catch (err) {
-    if (err instanceof NeedsMoreInfoError) {
-      return { needsInfo: true, request: err.requestMessage, supplements: err.supplements };
-    }
     if (err instanceof CreditExhaustedError || err instanceof UserApiKeyMissingError) {
       return { error: err.message };
     }

@@ -4,7 +4,8 @@ const map: Record<
   string,
   { tone: "neutral" | "amber" | "leaf" | "sky" | "accent" | "dark"; label: string }
 > = {
-  draft: { tone: "neutral", label: "생성중" },
+  draft: { tone: "sky", label: "생성중" },
+  failed: { tone: "accent", label: "생성 실패" },
   ready_for_review: { tone: "amber", label: "검토 대기" },
   revising: { tone: "sky", label: "재작성중" },
   approved: { tone: "accent", label: "발행 가능" },

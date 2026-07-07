@@ -89,7 +89,7 @@ export const personas = sqliteTable("personas", {
   audience: text("audience"),                // 타겟 독자
   brandVoice: text("brand_voice"),           // 톤·말투
   pointOfView: text("point_of_view", {
-    enum: ["first_person", "third_person", "expert"],
+    enum: ["first_person", "owner", "third_person", "expert"],
   }).notNull().default("first_person"),
   formality: text("formality", {
     enum: ["informal", "neutral", "formal"],
@@ -200,7 +200,8 @@ export const drafts = sqliteTable("drafts", {
 
   status: text("status", {
     enum: [
-      "draft",            // AI 생성 진행중
+      "draft",            // AI 생성 진행중(백그라운드)
+      "failed",           // 백그라운드 생성 실패
       "ready_for_review", // 관리자 승인 대기
       "revising",         // 반려 후 재작성중
       "approved",         // 발행 가능

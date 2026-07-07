@@ -135,12 +135,29 @@ export function ManualDraftForm({
               className="block w-full text-sm text-ink-600 file:mr-3 file:rounded-lg file:border-0 file:bg-ink-800 file:px-3 file:py-1.5 file:text-paper-100 file:text-sm file:font-semibold hover:file:bg-ink-900"
             />
             {fileNames.length > 0 ? (
-              <p className="mt-2 text-xs text-ink-600">
-                선택됨 {fileNames.length}장: {fileNames.join(", ")}
-              </p>
+              <div className="mt-3 space-y-2">
+                <p className="text-xs text-ink-600">
+                  각 사진에 <strong>짧은 설명</strong>을 달아주세요 — 본문의 맞는 문단에 그 사진을 배치합니다. (예: 프리웨이트존 / 러닝머신 구역 / 매장 외관)
+                </p>
+                {fileNames.map((n, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="w-32 shrink-0 truncate text-[11px] text-ink-400" title={n}>
+                      {i + 1}. {n}
+                    </span>
+                    <Input
+                      name="photoLabel"
+                      placeholder="이 사진 설명 (예: 프리웨이트존)"
+                      className="text-sm"
+                    />
+                  </div>
+                ))}
+                <p className="text-[11px] text-ink-400">
+                  설명을 비워두면 올린 순서대로 배치됩니다. JPG·PNG·HEIC·WebP, 장당 최대 10MB.
+                </p>
+              </div>
             ) : (
               <p className="mt-2 text-xs text-ink-400">
-                JPG·PNG·HEIC·WebP, 장당 최대 10MB. 올린 순서대로 본문에 배치됩니다. (없이 생성도 가능)
+                JPG·PNG·HEIC·WebP, 장당 최대 10MB. 사진마다 설명을 달면 본문 맞는 위치에 배치됩니다. (없이 생성도 가능)
               </p>
             )}
             <p className="mt-1 text-[11px] text-ink-400">
