@@ -5,7 +5,7 @@
  */
 import { db, schema } from "@/db/client";
 import { and, desc, eq, gte } from "drizzle-orm";
-import { llm, UserApiKeyMissingError } from "./llm";
+import { llm, UserApiKeyMissingError, CreditExhaustedError } from "./llm";
 export { UserApiKeyMissingError };
 import {
   bodyPrompt,
@@ -369,7 +369,10 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
 export async function generateDraftForBlog(
   blogId: string,
   callerUserId?: string,
-  augment?: AugmentArg
+  augment?: AugmentArg,
+  /** 백그라운드 생성 — 이 초안 행(status="draft")을 채워 넣는다(INSERT 대신 UPDATE).
+   *  지정되면 되묻기(NeedsMoreInfoError)를 던지지 않고 있는 정보로 최선 생성 + 한계 고지한다. */
+  existingDraftId?: string
 ) {
   const blog = await db.query.blogs.findFirst({
     where: eq(schema.blogs.id, blogId),
@@ -401,11 +404,14 @@ export async function generateDraftForBlog(
      정보가 부족하고 아직 진전 여지가 있으면 억지 생성 대신 되묻는다(NeedsMoreInfoError).
      진전 없이 종료(stalled)면 누적 정보만으로 최선 생성하고 한계를 고지한다. */
   const { supplements, stalled } = mergeAugment(augment);
+  /* 백그라운드 생성(existingDraftId) 중엔 대화형 되묻기가 불가하므로 되묻지 않고
+     stalled 와 동일하게 '있는 정보로 최선 + 한계 고지'로 처리한다. */
+  const canClarify = !stalled && !existingDraftId;
   const preReport = assessInsufficiency(persona, { lengthTarget, supplements });
-  if (!preReport.sufficient && !stalled) {
+  if (!preReport.sufficient && canClarify) {
     throw new NeedsMoreInfoError(preReport.requestMessage, preReport.missingFields, supplements);
   }
-  let limitationFlag = !preReport.sufficient && stalled ? limitationNotice(preReport.missingFields) : null;
+  let limitationFlag = !preReport.sufficient && !canClarify ? limitationNotice(preReport.missingFields) : null;
   const preamble = augmentedPreamble(basePreamble, supplements);
 
   /* --- Step 1: discover topic candidates (skip if any selected unused topic exists) --- */
@@ -668,7 +674,7 @@ export async function generateDraftForBlog(
       fabricationKinds: fabHits.map((h) => h.kind),
     })
   ) {
-    if (!stalled) {
+    if (canClarify) {
       const req = buildAugmentationRequest(
         ["material"],
         `현재 약 ${bodyMd.replace(/\s+/g, "").length}자까지 썼지만 목표 분량을 근거 있는 내용으로 채우기엔 사실 소재가 부족합니다.`
@@ -678,17 +684,15 @@ export async function generateDraftForBlog(
     limitationFlag = limitationFlag ?? limitationNotice(["material"]);
   }
 
-  /* --- Step 5: persist draft --- */
-  const [draft] = await db
-    .insert(schema.drafts)
-    .values({
+  /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
+  const draftValues = {
       blogId,
       topicId: topicRow!.id,
       title: topicRow!.title,
       summary: topicRow!.angle ?? null,
       bodyMd,
       imagePlanJson: JSON.stringify(outline.imagePlan),
-      status: "ready_for_review",
+      status: "ready_for_review" as const,
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
       seoScore: seo.score,
@@ -710,8 +714,17 @@ export async function generateDraftForBlog(
       llmInputTokens: totalInTokens,
       llmOutputTokens: totalOutTokens,
       llmCostCents: totalCostCents,
-    })
-    .returning();
+      updatedAt: new Date().toISOString(),
+  };
+  const draft = existingDraftId
+    ? (
+        await db
+          .update(schema.drafts)
+          .set(draftValues)
+          .where(eq(schema.drafts.id, existingDraftId))
+          .returning()
+      )[0]
+    : (await db.insert(schema.drafts).values(draftValues).returning())[0];
 
   await db.insert(schema.draftVersions).values({
     draftId: draft.id,
@@ -774,6 +787,9 @@ export async function generateDraftFromBrief(opts: {
   uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string }>;
   /** 대화형 보강 루프 — 누적된 이전 라운드 입력 + 이번 라운드 새 입력. */
   augment?: AugmentArg;
+  /** 백그라운드 생성 — 이 초안 행(status="draft")을 채워 넣는다(INSERT 대신 UPDATE).
+   *  지정되면 되묻기를 던지지 않고 있는 정보로 최선 생성 + 한계 고지한다. */
+  existingDraftId?: string;
 }) {
   const blog = await db.query.blogs.findFirst({
     where: eq(schema.blogs.id, opts.blogId),
@@ -808,11 +824,13 @@ export async function generateDraftFromBrief(opts: {
      반자동은 사용자가 직접 입력한 brief 도 근거·소재로 함께 본다. 부족하고 진전 여지가 있으면
      되묻고(NeedsMoreInfoError), 진전 없이 종료(stalled)면 누적 정보만으로 최선 생성 + 한계 고지. */
   const { supplements, stalled } = mergeAugment(opts.augment);
+  /* 백그라운드 생성 중엔 대화형 되묻기 불가 → stalled 와 동일 처리(최선 생성 + 한계 고지). */
+  const canClarify = !stalled && !opts.existingDraftId;
   const preReport = assessInsufficiency(persona, { lengthTarget, userBrief: brief, supplements });
-  if (!preReport.sufficient && !stalled) {
+  if (!preReport.sufficient && canClarify) {
     throw new NeedsMoreInfoError(preReport.requestMessage, preReport.missingFields, supplements);
   }
-  let limitationFlag = !preReport.sufficient && stalled ? limitationNotice(preReport.missingFields) : null;
+  let limitationFlag = !preReport.sufficient && !canClarify ? limitationNotice(preReport.missingFields) : null;
   const preamble = augmentedPreamble(basePreamble, supplements);
 
   /* --- Step 1 대체: 사용자 지정 주제를 topicCandidate로 기록 --- */
@@ -961,7 +979,7 @@ export async function generateDraftFromBrief(opts: {
       fabricationKinds: fabHits.map((h) => h.kind),
     })
   ) {
-    if (!stalled) {
+    if (canClarify) {
       const req = buildAugmentationRequest(
         ["material"],
         `현재 약 ${bodyMd.replace(/\s+/g, "").length}자까지 썼지만 목표 분량을 근거 있는 내용으로 채우기엔 사실 소재가 부족합니다.`
@@ -975,17 +993,15 @@ export async function generateDraftFromBrief(opts: {
   const totalOutTokens = outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens;
   const totalCostCents = outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents;
 
-  /* --- Step 5: persist draft --- */
-  const [draft] = await db
-    .insert(schema.drafts)
-    .values({
+  /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
+  const draftValues = {
       blogId: opts.blogId,
       topicId: topicRow.id,
       title,
       summary: brief ? brief.slice(0, 200) : null,
       bodyMd,
       imagePlanJson: JSON.stringify(outline.imagePlan),
-      status: "ready_for_review",
+      status: "ready_for_review" as const,
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
       seoScore: seo.score,
@@ -1007,8 +1023,17 @@ export async function generateDraftFromBrief(opts: {
       llmInputTokens: totalInTokens,
       llmOutputTokens: totalOutTokens,
       llmCostCents: totalCostCents,
-    })
-    .returning();
+      updatedAt: new Date().toISOString(),
+  };
+  const draft = opts.existingDraftId
+    ? (
+        await db
+          .update(schema.drafts)
+          .set(draftValues)
+          .where(eq(schema.drafts.id, opts.existingDraftId))
+          .returning()
+      )[0]
+    : (await db.insert(schema.drafts).values(draftValues).returning())[0];
 
   await db.insert(schema.draftVersions).values({
     draftId: draft.id,
@@ -1064,6 +1089,130 @@ export async function generateDraftFromBrief(opts: {
   }
 
   return draft;
+}
+
+/* =========================================================================
+   백그라운드 생성 오케스트레이션
+   -------------------------------------------------------------------------
+   생성 본작업(~3~5분)이 HTTP 요청을 붙잡으면 Railway 게이트웨이 타임아웃이 난다.
+   해결: (1) 착수 전 '정보 부족' 되묻기는 동기로 먼저 판정(빠름·대화형 유지) →
+        (2) 통과하면 placeholder 초안(status="draft") 즉시 생성 →
+        (3) 무거운 파이프라인은 await 하지 않고 백그라운드로 실행(같은 초안 행을 UPDATE) →
+        (4) 요청은 즉시 초안 페이지로 리다이렉트, 페이지가 폴링하며 완료를 기다린다.
+   품질에는 무영향 — 동일 파이프라인을 그대로 돌리고 실행 시점만 요청 밖으로 옮긴다.
+   ========================================================================= */
+
+export type StartGenerationResult =
+  | { ok: true; draftId: string }
+  | { needsInfo: true; request: string; supplements: string[] };
+
+/** 생성 실패 시 초안을 실패 상태로 표시하고(사유 메모) 알림을 보낸다. */
+async function markDraftFailed(draftId: string, err: unknown, callerUserId?: string) {
+  console.error(`[generation] draft ${draftId} 생성 실패:`, err);
+  // NeedsMoreInfoError 는 백그라운드 경로에선 canClarify=false 로 절대 throw 되지 않으므로 여기 도달 X.
+  const msg =
+    err instanceof CreditExhaustedError || err instanceof UserApiKeyMissingError
+      ? err.message
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  try {
+    await db
+      .update(schema.drafts)
+      .set({
+        status: "failed",
+        seoIssuesJson: JSON.stringify([`⛔ 생성 실패: ${msg.slice(0, 200)}`]),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(schema.drafts.id, draftId));
+  } catch (e) {
+    console.error("[generation] 실패 표시 자체가 실패:", e);
+  }
+  if (callerUserId) {
+    void sendTelegramToUser(
+      callerUserId,
+      `⚠️ 초안 생성에 실패했습니다.\n사유: ${msg.slice(0, 160)}\n초안 페이지에서 다시 시도해 주세요.`
+    );
+  }
+}
+
+/** 완전자동 — 백그라운드 생성 착수. 정보 부족이면 되묻고, 아니면 placeholder 생성 후 즉시 반환. */
+export async function startAutoGeneration(
+  blogId: string,
+  callerUserId?: string,
+  augment?: AugmentArg
+): Promise<StartGenerationResult> {
+  const blog = await db.query.blogs.findFirst({
+    where: eq(schema.blogs.id, blogId),
+    with: { personas: true },
+  });
+  if (!blog) throw new Error("BLOG_NOT_FOUND");
+  const activePersona = blog.personas.find((p) => p.isActive) ?? blog.personas[0];
+  if (!activePersona) throw new Error("PERSONA_MISSING");
+  const persona = personaFromRow(blog, activePersona);
+  const lengthTarget =
+    persona.preferredLengthMin > 0 && persona.preferredLengthMax > 0
+      ? Math.round((persona.preferredLengthMin + persona.preferredLengthMax) / 2)
+      : null;
+
+  // 착수 전 되묻기(동기·빠름). 진전 여지 있으면 대화형 보강 요청.
+  const { supplements, stalled } = mergeAugment(augment);
+  const pre = assessInsufficiency(persona, { lengthTarget, supplements });
+  if (!pre.sufficient && !stalled) {
+    return { needsInfo: true, request: pre.requestMessage, supplements };
+  }
+
+  // placeholder 초안(생성중). 제목은 주제탐색 후 채워지므로 임시값.
+  const [placeholder] = await db
+    .insert(schema.drafts)
+    .values({ blogId, title: "초안 생성 중…", status: "draft" })
+    .returning();
+
+  // 백그라운드 실행 — 요청을 붙잡지 않는다(Railway 는 상주 프로세스라 응답 후에도 계속 돈다).
+  void generateDraftForBlog(blogId, callerUserId, augment, placeholder.id).catch((err) =>
+    markDraftFailed(placeholder.id, err, callerUserId)
+  );
+  return { ok: true, draftId: placeholder.id };
+}
+
+/** 반자동(직접 입력) — 백그라운드 생성 착수. */
+export async function startBriefGeneration(opts: {
+  blogId: string;
+  callerUserId?: string;
+  title: string;
+  brief: string;
+  keywords?: string[];
+  photoMode: "manual" | "auto";
+  uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string }>;
+  augment?: AugmentArg;
+}): Promise<StartGenerationResult> {
+  const blog = await db.query.blogs.findFirst({
+    where: eq(schema.blogs.id, opts.blogId),
+    with: { personas: true },
+  });
+  if (!blog) throw new Error("BLOG_NOT_FOUND");
+  const activePersona = blog.personas.find((p) => p.isActive) ?? blog.personas[0];
+  if (!activePersona) throw new Error("PERSONA_MISSING");
+  const persona = personaFromRow(blog, activePersona);
+  const title = opts.title.trim();
+  const brief = opts.brief.trim();
+  const lengthTarget = parseExplicitLength(`${title}\n${brief}`);
+
+  const { supplements, stalled } = mergeAugment(opts.augment);
+  const pre = assessInsufficiency(persona, { lengthTarget, userBrief: brief, supplements });
+  if (!pre.sufficient && !stalled) {
+    return { needsInfo: true, request: pre.requestMessage, supplements };
+  }
+
+  const [placeholder] = await db
+    .insert(schema.drafts)
+    .values({ blogId: opts.blogId, title: title || "초안 생성 중…", status: "draft" })
+    .returning();
+
+  void generateDraftFromBrief({ ...opts, existingDraftId: placeholder.id }).catch((err) =>
+    markDraftFailed(placeholder.id, err, opts.callerUserId)
+  );
+  return { ok: true, draftId: placeholder.id };
 }
 
 export async function reviseDraftWithFeedback(opts: {

@@ -12,7 +12,6 @@ import {
 import {
   reviseDraftWithFeedback,
   UserApiKeyMissingError,
-  NeedsMoreInfoError,
 } from "@/lib/pipeline";
 import {
   CreditExhaustedError,
@@ -222,15 +221,17 @@ export async function generateNewDraftActionState(
 
   let draftId: string;
   try {
-    const { generateDraftForBlog } = await import("@/lib/pipeline");
-    const draft = await generateDraftForBlog(blogId, user.id, augment);
+    // 백그라운드 생성 착수 — 정보 부족이면 되묻고, 아니면 placeholder 즉시 생성 후 반환(타임아웃 방지).
+    const { startAutoGeneration } = await import("@/lib/pipeline");
+    const res = await startAutoGeneration(blogId, user.id, augment);
+    if ("needsInfo" in res) {
+      return { needsInfo: true, request: res.request, supplements: res.supplements };
+    }
     revalidatePath("/queue");
     revalidatePath("/dashboard");
-    draftId = draft.id;
+    draftId = res.draftId;
   } catch (err) {
-    if (err instanceof NeedsMoreInfoError) {
-      return { needsInfo: true, request: err.requestMessage, supplements: err.supplements };
-    }
+    // 착수 전(preflight) 에러만 여기 도달. 생성 본작업 에러는 백그라운드에서 초안 상태로 표시된다.
     if (
       err instanceof CreditExhaustedError ||
       err instanceof UserApiKeyMissingError
@@ -291,8 +292,8 @@ export async function generateManualDraftActionState(
 
   let draftId: string;
   try {
-    const { generateDraftFromBrief } = await import("@/lib/pipeline");
-    const draft = await generateDraftFromBrief({
+    const { startBriefGeneration } = await import("@/lib/pipeline");
+    const res = await startBriefGeneration({
       blogId,
       callerUserId: user.id,
       title,
@@ -302,13 +303,13 @@ export async function generateManualDraftActionState(
       uploadedImages,
       augment,
     });
+    if ("needsInfo" in res) {
+      return { needsInfo: true, request: res.request, supplements: res.supplements };
+    }
     revalidatePath("/queue");
     revalidatePath("/dashboard");
-    draftId = draft.id;
+    draftId = res.draftId;
   } catch (err) {
-    if (err instanceof NeedsMoreInfoError) {
-      return { needsInfo: true, request: err.requestMessage, supplements: err.supplements };
-    }
     if (err instanceof CreditExhaustedError || err instanceof UserApiKeyMissingError) {
       return { error: err.message };
     }

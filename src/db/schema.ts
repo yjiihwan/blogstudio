@@ -200,7 +200,8 @@ export const drafts = sqliteTable("drafts", {
 
   status: text("status", {
     enum: [
-      "draft",            // AI 생성 진행중
+      "draft",            // AI 생성 진행중(백그라운드)
+      "failed",           // 백그라운드 생성 실패
       "ready_for_review", // 관리자 승인 대기
       "revising",         // 반려 후 재작성중
       "approved",         // 발행 가능

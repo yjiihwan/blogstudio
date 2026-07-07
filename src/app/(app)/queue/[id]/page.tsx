@@ -6,6 +6,7 @@ import { eq, desc } from "drizzle-orm";
 import { DraftStatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { DraftReview } from "@/components/draft-review";
+import { GeneratingView } from "./GeneratingView";
 import { scoreHuman, scoreSeo } from "@/lib/scoring";
 import { relativeTime } from "@/lib/utils";
 import { getAccessibleDraft, requireUser } from "@/lib/auth";
@@ -38,6 +39,72 @@ export default async function DraftDetailPage({
     },
   });
   if (!draft) notFound();
+
+  // 백그라운드 생성 중(draft) / 생성 실패(failed) — 검토 화면 대신 상태 화면을 보여준다.
+  if (draft.status === "draft" || draft.status === "failed") {
+    let failNote = "";
+    if (draft.status === "failed") {
+      try {
+        const notes = JSON.parse(draft.seoIssuesJson ?? "[]") as string[];
+        failNote = notes.find((n) => n.startsWith("⛔")) ?? "생성 중 오류가 발생했습니다.";
+      } catch {
+        failNote = "생성 중 오류가 발생했습니다.";
+      }
+    }
+    return (
+      <div className="px-5 lg:px-10 py-8 lg:py-10 max-w-7xl mx-auto">
+        <div className="mb-4">
+          <Link
+            href="/queue"
+            className="inline-flex items-center gap-1 text-sm text-ink-500 hover:text-ink-900"
+          >
+            <ChevronLeft className="size-4" />
+            초안 큐
+          </Link>
+        </div>
+        <header className="mb-6">
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+            <Badge tone="outline">{draft.blog.displayName}</Badge>
+            <DraftStatusBadge status={draft.status} />
+            <span className="text-[11px] text-ink-400">
+              {relativeTime(draft.createdAt)}
+            </span>
+          </div>
+          <h1 className="text-2xl lg:text-3xl font-black tracking-tight text-balance leading-tight">
+            {draft.title}
+          </h1>
+        </header>
+
+        {draft.status === "draft" ? (
+          <GeneratingView createdAtMs={new Date(draft.createdAt).getTime()} />
+        ) : (
+          <div className="rounded-2xl border border-accent-300 bg-accent-50 p-8 max-w-3xl">
+            <h2 className="text-lg font-bold text-ink-900">초안 생성에 실패했습니다</h2>
+            <p className="mt-2 whitespace-pre-wrap text-sm text-ink-600">
+              {failNote.replace(/^⛔\s*생성 실패:\s*/, "")}
+            </p>
+            <p className="mt-4 text-sm text-ink-500">
+              일시적인 API 오류일 수 있습니다. 잠시 후 새 초안으로 다시 시도해 주세요.
+            </p>
+            <div className="mt-5 flex gap-3">
+              <Link
+                href="/queue/new"
+                className="inline-flex items-center rounded-lg bg-ink-800 px-4 py-2 text-sm font-semibold text-paper-100 hover:bg-ink-900"
+              >
+                새 초안 만들기
+              </Link>
+              <Link
+                href="/queue"
+                className="inline-flex items-center rounded-lg border border-paper-300 px-4 py-2 text-sm font-semibold text-ink-700 hover:bg-paper-100"
+              >
+                큐로 돌아가기
+              </Link>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const persona = draft.blog.personas.find((p) => p.isActive) ?? draft.blog.personas[0];
   const imagePlan = JSON.parse(draft.imagePlanJson) as Array<{
