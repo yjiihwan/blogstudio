@@ -18,6 +18,7 @@ import {
   parseLengthIntent,
   parseExplicitLength,
   findAbsentFacilityHits,
+  findForbiddenTopicHits,
   buildGroundingText,
   findFabricationHits,
   factGuardPrompt,
@@ -105,6 +106,7 @@ async function factGuardBody(opts: {
   bodyMd: string;
   title: string;
   groundingText: string;
+  forbiddenTerms?: string[];
   preamble: string;
   callerUserId?: string;
   model: string;
@@ -112,51 +114,81 @@ async function factGuardBody(opts: {
 }): Promise<{
   bodyMd: string;
   removed: string[];
+  /** 자가감사 후에도 결정론 게이트에 잔존한 금지 소재(있으면 하드 위반) */
+  forbiddenHits: string[];
   inTokens: number;
   outTokens: number;
   costCents: number;
 }> {
-  const zero = { bodyMd: opts.bodyMd, removed: [] as string[], inTokens: 0, outTokens: 0, costCents: 0 };
+  const forbidden = opts.forbiddenTerms ?? [];
+  const zero = {
+    bodyMd: opts.bodyMd,
+    removed: [] as string[],
+    forbiddenHits: findForbiddenTopicHits(`${opts.title}\n${opts.bodyMd}`, forbidden),
+    inTokens: 0,
+    outTokens: 0,
+    costCents: 0,
+  };
   if (opts.model === "mock") return zero;
   const guide = await getGlobalWritingGuide();
   if (!guide.enabled || !guide.text.trim()) return zero;
-  try {
-    const res = await llm({
-      system: opts.preamble,
-      callerUserId: opts.callerUserId,
-      maxTokens: opts.maxTokens,
-      messages: [
-        {
-          role: "user",
-          content: factGuardPrompt({
-            groundingText: opts.groundingText,
-            title: opts.title,
-            bodyMd: opts.bodyMd,
-          }),
-        },
-      ],
-    });
-    const cost = { inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
-    const parsed = safeJson<{ removed?: string[]; bodyMd?: string }>(res.text);
-    if (!parsed || typeof parsed.bodyMd !== "string") return { ...zero, ...cost };
-    const out = parsed.bodyMd
-      .trim()
-      .replace(/^```(?:markdown|json)?/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
-    const removed = Array.isArray(parsed.removed) ? parsed.removed.filter((s) => typeof s === "string") : [];
-    const origImgs = (opts.bodyMd.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
-    const newImgs = (out.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
-    const outChars = out.replace(/\s+/g, "").length;
-    const origChars = opts.bodyMd.replace(/\s+/g, "").length;
-    // 이미지 마커 유실, 과도 축소(50% 미만), 빈 응답이면 원본 유지(제거 목록은 감사용으로 보존).
-    if (newImgs < origImgs || outChars < origChars * 0.5 || out.length < 50) {
-      return { bodyMd: opts.bodyMd, removed, ...cost };
+
+  let cur = opts.bodyMd;
+  const removedAll: string[] = [];
+  let inTokens = 0;
+  let outTokens = 0;
+  let costCents = 0;
+
+  // 자가감사(fact-audit) 패스 — 결정론 게이트가 깨끗해질 때까지 최대 2회(2차는 잔존 금지어 타깃).
+  for (let pass = 0; pass < 2; pass++) {
+    try {
+      const res = await llm({
+        system: opts.preamble,
+        callerUserId: opts.callerUserId,
+        maxTokens: opts.maxTokens,
+        messages: [
+          {
+            role: "user",
+            content: factGuardPrompt({
+              groundingText: opts.groundingText,
+              forbiddenTerms: forbidden,
+              title: opts.title,
+              bodyMd: cur,
+            }),
+          },
+        ],
+      });
+      inTokens += res.inputTokens;
+      outTokens += res.outputTokens;
+      costCents += res.costCents;
+      const parsed = safeJson<{ removed?: string[]; bodyMd?: string }>(res.text);
+      if (parsed && typeof parsed.bodyMd === "string") {
+        const out = parsed.bodyMd
+          .trim()
+          .replace(/^```(?:markdown|json)?/i, "")
+          .replace(/```\s*$/i, "")
+          .trim();
+        const origImgs = (cur.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
+        const newImgs = (out.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
+        const outChars = out.replace(/\s+/g, "").length;
+        const origChars = cur.replace(/\s+/g, "").length;
+        if (Array.isArray(parsed.removed)) {
+          removedAll.push(...parsed.removed.filter((s) => typeof s === "string"));
+        }
+        // 이미지 마커 유실·과도 축소·빈 응답이 아니면 채택(제거 목록은 감사용으로 항상 보존).
+        if (!(newImgs < origImgs || outChars < origChars * 0.5 || out.length < 50)) {
+          cur = out;
+        }
+      }
+    } catch {
+      break;
     }
-    return { bodyMd: out, removed, ...cost };
-  } catch {
-    return zero;
+    // 결정론 재검증 — 금지 소재가 남지 않았으면 조기 종료.
+    if (findForbiddenTopicHits(`${opts.title}\n${cur}`, forbidden).length === 0) break;
   }
+
+  const forbiddenHits = findForbiddenTopicHits(`${opts.title}\n${cur}`, forbidden);
+  return { bodyMd: cur, removed: removedAll, forbiddenHits, inTokens, outTokens, costCents };
 }
 
 /**
@@ -173,6 +205,8 @@ async function expandBodyToTarget(opts: {
   preamble: string;
   callerUserId?: string;
   maxTokens?: number;
+  /** 페르소나 '없는 시설/금지 소재' — 분량 확보 시 지어내지 못하게 명시 열거한다. */
+  forbiddenTerms?: string[];
 }): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
   const noWs = (s: string) => s.replace(/\s+/g, "").length;
   let rawBody = opts.rawBody;
@@ -199,6 +233,9 @@ async function expandBodyToTarget(opts: {
             `- 기존 본문 내용을 반복하지 말고, 새로운 정보·관점·이용 팁·자주 묻는 질문 등으로 다양화하세요.`,
             `- 글의 톤·말투·격식·금지어는 기존 본문과 동일하게 유지하세요.`,
             `- 확인되지 않은 시설·프로그램·수치·가격을 지어내지 마세요(없는 사실 날조 금지). 확실한 것의 디테일·독자 관점·일반적 정황으로 자연스럽게 채우세요.`,
+            opts.forbiddenTerms?.length
+              ? `- **다음은 이 업체에 없으므로 절대 언급 금지(띄어쓰기·표현 우회도 금지): ${opts.forbiddenTerms.join(", ")}.** 분량이 부족해도 이것들로 채우지 마세요.`
+              : null,
             `- 제목(#)·인사말·마무리 CTA·이미지 마커(<!-- IMG -->)는 넣지 마세요. 오직 새 ## 섹션 본문만 출력.`,
             ``,
             `**기존 본문 (참고용 — 다시 출력하지 마세요)**:`,
@@ -207,7 +244,9 @@ async function expandBodyToTarget(opts: {
             "```",
             ``,
             `이어질 새 ## 섹션들의 Markdown만 출력하세요.`,
-          ].join("\n"),
+          ]
+            .filter((x) => x !== null)
+            .join("\n"),
         },
       ],
     });
@@ -543,6 +582,7 @@ export async function generateDraftForBlog(
       preamble,
       callerUserId,
       maxTokens: bodyMaxTokens,
+      forbiddenTerms: persona.absentFacilities,
     });
     rawBody = exp.bodyMd;
     bodyInTokens += exp.inTokens;
@@ -578,6 +618,7 @@ export async function generateDraftForBlog(
     bodyMd: hum.bodyMd,
     title: topicRow!.title,
     groundingText,
+    forbiddenTerms: persona.absentFacilities,
     preamble,
     callerUserId,
     model: bodyRes.model,
@@ -653,6 +694,9 @@ export async function generateDraftForBlog(
         ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
         ...(guard.removed.length
           ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
+          : []),
+        ...(guard.forbiddenHits.length
+          ? [`🚫 금지 소재 잔존: ${guard.forbiddenHits.join(", ")} (하드 위반 — 재수정 필요)`]
           : []),
         ...(fabHits.length
           ? [`⚠️ 미검증 주장 잔존: ${fabHits.map((h) => h.match).join(", ")} (사실 확인 필요)`]
@@ -845,6 +889,7 @@ export async function generateDraftFromBrief(opts: {
       preamble,
       callerUserId: opts.callerUserId,
       maxTokens: bodyMaxTokens,
+      forbiddenTerms: persona.absentFacilities,
     });
     rawBody = exp.bodyMd;
     bodyInTokens += exp.inTokens;
@@ -881,6 +926,7 @@ export async function generateDraftFromBrief(opts: {
     bodyMd: hum.bodyMd,
     title,
     groundingText,
+    forbiddenTerms: persona.absentFacilities,
     preamble,
     callerUserId: opts.callerUserId,
     model: bodyRes.model,
@@ -944,6 +990,9 @@ export async function generateDraftFromBrief(opts: {
         ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
         ...(guard.removed.length
           ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
+          : []),
+        ...(guard.forbiddenHits.length
+          ? [`🚫 금지 소재 잔존: ${guard.forbiddenHits.join(", ")} (하드 위반 — 재수정 필요)`]
           : []),
         ...(fabHits.length
           ? [`⚠️ 미검증 주장 잔존: ${fabHits.map((h) => h.match).join(", ")} (사실 확인 필요)`]

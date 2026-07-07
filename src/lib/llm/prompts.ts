@@ -290,12 +290,33 @@ export function findFabricationHits(
 }
 
 /**
+ * 결정론적 '닫힌세계 하드 게이트': 페르소나 '없는 시설/금지 소재'로 시딩된 용어가
+ * 제목/본문에 (공백·중점 무시) 등장하는지 검사한다. findAbsentFacilityHits 보다 강하게
+ * 띄어쓰기 변형까지 잡는다 — "그룹수업" 시드로 "그룹 운동 수업", "그룹·클래스"도 검출.
+ * fact-guard LLM 패스가 놓친 정성적 날조(클래스/강사/그룹수업 등)를 잡는 최후 방어선.
+ */
+export function findForbiddenTopicHits(text: string, terms: string[]): string[] {
+  if (!text || !terms?.length) return [];
+  const norm = (s: string) => s.toLowerCase().replace(/[\s·・、,.]/g, "");
+  const hay = norm(text);
+  const hits = new Set<string>();
+  for (const raw of terms) {
+    const t = (raw || "").trim();
+    if (t.replace(/\s+/g, "").length < 2) continue;
+    if (hay.includes(norm(t))) hits.add(t);
+  }
+  return [...hits];
+}
+
+/**
  * 발행 전 사실검증(fact-guard) 프롬프트 — 업종 무관.
  * '확정 사실'로 뒷받침되지 않는 구체 주장을 걷어낸(또는 일반화한) 전체 본문을 JSON으로 돌려받는다.
  * 특정 업종 하드코딩 없음. grounding 이 비어도 안전하게 동작(고유 수치·실적·시설 주장 자체를 금지).
+ * forbiddenTerms: 페르소나 '없는 시설/금지 소재' — 명시 열거해 문장 단위로 반드시 걷어내게 한다.
  */
 export function factGuardPrompt(opts: {
   groundingText: string;
+  forbiddenTerms?: string[];
   title: string;
   bodyMd: string;
 }): string {
@@ -308,12 +329,18 @@ export function factGuardPrompt(opts: {
     `- "N년 전통"·설립연도 같은 연혁, 수상·인증·순위·선정 실적`,
     `- 회원수·지점수·좌석/객실/평수 같은 규모 수치, 평점·후기 수`,
     `- 확정 목록에 없는 특정 부대시설·프로그램·클래스·이벤트·혜택`,
+    opts.forbiddenTerms?.length
+      ? `\n**절대 금지 소재 (아래 단어/개념은 확정 사실에 없다 — 문장 단위로 전부 삭제·치환하라. 띄어쓰기·표현을 바꿔 우회한 것도 삭제):** ${opts.forbiddenTerms.join(", ")}`
+      : null,
+    ``,
+    `검증 방식(문장 단위): 본문을 한 문장씩 읽어 각 문장의 사실 주장이 위 "확정 사실"로 뒷받침되는지 판정하고,`,
+    `근거 없는 주장(특히 위 '절대 금지 소재')이 담긴 문장은 삭제하거나 근거 있는 서술로 치환한 뒤 자연스럽게 잇는다.`,
     ``,
     `고치는 원칙:`,
     `1. 근거 없는 주장을 담은 문장을 삭제하거나, 고유 수치·주장을 빼고 일반적 서술로 바꾼다.`,
     `2. 삭제로 문단이 어색해지면 자연스럽게 다듬되 **새 사실을 또 지어내지 마라.**`,
     `3. 확정 사실로 뒷받침되는 내용, 분위기·감각·독자 관점·일반적 정황 서술은 **그대로 둔다.**`,
-    `4. 말투·톤·격식·전체 길이·이미지 마커(\`<!-- IMG:slot=N -->\`)·제목은 그대로 유지한다(길이를 크게 줄이지 말 것).`,
+    `4. 말투·톤·격식·이미지 마커(\`<!-- IMG:slot=N -->\`)·제목은 그대로 유지한다. 금지 소재를 걷어내느라 길이가 줄면, 확정 사실(머신·존·편의·이벤트)의 디테일·감각 묘사로 자연스럽게 보완하되 새 사실은 만들지 마라.`,
     `5. 애매하면(근거가 있는지 불확실하면) 고유 수치·주장을 빼는 쪽을 택한다.`,
     ``,
     `## 확정 사실 (이 밖의 구체 사실은 지어낸 것으로 취급)`,
@@ -621,6 +648,9 @@ export function bodyPrompt(opts: {
     hasBrief ? `` : null,
     `반드시 지킬 규칙:`,
     `0. **거짓·날조 금지 (최우선).** 확인되지 않은 사실을 지어내지 마라 — 실제 운영 여부를 모르는 서비스·클래스·프로그램·부대시설·이벤트·할인·가격·수치·수상·연혁·후기를 있는 것처럼 쓰면 절대 안 된다(예: 없는 "명상 클래스"를 운영한다고 서술 금지). 확정 사실로 쓸 수 있는 건 페르소나 설정·사용자 입력·주어진 주제 정보뿐이다. 애매하면 쓰지 말고, 분위기·감각·독자 관점·일반적 정황으로 자연스럽게 풀어라.`,
+    opts.persona.absentFacilities?.length
+      ? `0-1. **닫힌세계 규칙 (하드 제약).** 이 글은 위 "확정 사실/사용자 지정 내용"에 명시된 시설·프로그램·서비스만 언급할 수 있다. 그 목록에 없는 것은 존재하지 않는 것으로 간주하고 제목·소제목·본문 어디에도 쓰지 마라. 특히 다음은 **이 업체에 없으므로 언급·암시 절대 금지**(띄어쓰기·표현을 바꿔 우회하는 것도 금지): ${opts.persona.absentFacilities.join(", ")}. 분량이 부족해도 이것들을 지어내 채우지 말고, 확정 시설의 디테일·감각 묘사로 늘려라.`
+      : null,
     `1. **글의 주체(업체)는 실제 상호 "${opts.persona.blogName}"로 부른다.** "${opts.topic.primaryKeyword}에서는~"처럼 키워드를 상호(업체 이름) 대신 쓰지 마라.`,
     `2. **그러면서도 메인 키워드 "${opts.topic.primaryKeyword}"를 정확히 그대로 2~3회 반드시 포함한다**(검색 노출 필수 — 0회 금지, 4회 이상 남발도 금지). 상호 대신이 아니라 "검색하는 사람의 표현"으로 문맥에 녹여라. 좋은 예: "${opts.topic.primaryKeyword}을(를) 알아보고 있다면", "${opts.topic.primaryKeyword} 중에서도 ~", "${opts.topic.primaryKeyword}을(를) 고민 중이라면 ${opts.persona.blogName}". 나쁜 예: 업체를 계속 "${opts.topic.primaryKeyword}"라고 부르기.`,
     lt
