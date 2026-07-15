@@ -67,6 +67,22 @@ export function PersonaEditor({
       : String(persona.emojiIntensity)
   );
 
+  // 톤-강도 부조화 경고(B안): 자유 선택은 막지 않고, 딱딱/남성 톤에 높은 강도를 고르면 알림만.
+  const emojiDissonance = (() => {
+    const lv = emojiIntensity === "" ? null : Number(emojiIntensity);
+    if (lv !== 2 && lv !== 3) return null;
+    const isFormal = formality === "formal";
+    const isMale = gender === "male";
+    if (lv === 3 && (isFormal || isMale)) {
+      const who = isFormal ? "정중체(격식)" : "남성 톤";
+      return `‘${who}’ 페르소나에 이모지 ‘적극(레벨 3)’은 톤과 어울리지 않을 수 있어요. 담백·격식 글은 레벨 0~1이 자연스럽습니다.`;
+    }
+    if (lv === 2 && isFormal) {
+      return "‘정중체(격식)’ 페르소나에 이모지 ‘보통(레벨 2)’은 다소 부조화일 수 있어요. 격식 글은 레벨 0~1을 권장합니다.";
+    }
+    return null;
+  })();
+
   return (
     <form action={action} className="space-y-5 max-w-3xl">
       {/* ============== BLOG INFO ============== */}
@@ -216,6 +232,14 @@ export function PersonaEditor({
           <p className="text-xs text-muted-foreground">
             이모지는 감정이 실린 문장에만 넣습니다(정보·수치 문장 제외, 소제목 금지). ‘자동’은 격식/프리미엄 톤이면 레벨1(절제), 그 외 레벨2(보통)를 적용합니다.
           </p>
+          {emojiDissonance && (
+            <p
+              role="alert"
+              className="text-xs rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-amber-800"
+            >
+              ⚠️ {emojiDissonance} 그래도 원하시면 이 강도로 저장됩니다.
+            </p>
+          )}
         </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
