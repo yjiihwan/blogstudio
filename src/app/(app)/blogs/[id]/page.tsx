@@ -111,6 +111,7 @@ export default async function BlogEditPage({
           preferredLengthMax: persona?.preferredLengthMax ?? 2800,
           imagesPerPostMin: persona?.imagesPerPostMin ?? 3,
           imagesPerPostMax: persona?.imagesPerPostMax ?? 8,
+          emojiIntensity: (persona?.emojiIntensity ?? null) as 0 | 1 | 2 | 3 | null,
           notes: persona?.notes ?? "",
         }}
       />

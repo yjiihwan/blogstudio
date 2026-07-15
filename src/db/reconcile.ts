@@ -39,6 +39,8 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
     { name: "gender", ddl: "`gender` text" },
     { name: "facilities_json", ddl: "`facilities_json` text NOT NULL DEFAULT '[]'" },
     { name: "absent_facilities_json", ddl: "`absent_facilities_json` text NOT NULL DEFAULT '[]'" },
+    // 이모지 강도(0~3, nullable=미지정). NOT NULL 금지 — null 이 '자동' 의미를 가짐.
+    { name: "emoji_intensity", ddl: "`emoji_intensity` integer" },
   ],
 };
 

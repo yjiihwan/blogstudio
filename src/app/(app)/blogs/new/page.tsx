@@ -70,6 +70,7 @@ export default async function NewBlogPage({
           preferredLengthMax: 2800,
           imagesPerPostMin: 3,
           imagesPerPostMax: 8,
+          emojiIntensity: null,
           sampleSnippets: [],
           qualityRules: [
             "과장 표현 사용 금지",

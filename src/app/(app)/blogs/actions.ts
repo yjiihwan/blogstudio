@@ -68,6 +68,13 @@ function readPayload(formData: FormData) {
       preferredLengthMax: Number(formData.get("preferredLengthMax") ?? 2800),
       imagesPerPostMin: Number(formData.get("imagesPerPostMin") ?? 3),
       imagesPerPostMax: Number(formData.get("imagesPerPostMax") ?? 8),
+      // 이모지 강도: "" = 자동(null), "0".."3" = 명시. 그 밖은 자동으로.
+      emojiIntensity: (() => {
+        const v = String(formData.get("emojiIntensity") ?? "").trim();
+        return v === "0" || v === "1" || v === "2" || v === "3"
+          ? (Number(v) as 0 | 1 | 2 | 3)
+          : null;
+      })(),
       sampleSnippets: [
         String(formData.get("sampleSnippet1") ?? "").trim(),
         String(formData.get("sampleSnippet2") ?? "").trim(),
@@ -114,6 +121,7 @@ export async function createBlogAction(formData: FormData) {
     preferredLengthMax: persona.preferredLengthMax,
     imagesPerPostMin: persona.imagesPerPostMin,
     imagesPerPostMax: persona.imagesPerPostMax,
+    emojiIntensity: persona.emojiIntensity,
     notes: persona.notes,
   });
 
@@ -166,6 +174,7 @@ export async function updateBlogAction(formData: FormData) {
     preferredLengthMax: persona.preferredLengthMax,
     imagesPerPostMin: persona.imagesPerPostMin,
     imagesPerPostMax: persona.imagesPerPostMax,
+    emojiIntensity: persona.emojiIntensity,
     notes: persona.notes,
     updatedAt: new Date().toISOString(),
   };

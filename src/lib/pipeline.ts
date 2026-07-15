@@ -28,6 +28,8 @@ import {
   limitationNotice,
   buildAugmentationRequest,
   augmentedPreamble,
+  resolveEmojiIntensity,
+  type EmojiIntensity,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
@@ -52,6 +54,8 @@ async function humanizeBody(opts: {
   minChars?: number;
   /** 큰 본문은 기본 4096토큰에서 잘리므로 호출부가 천장을 올려 전달한다. */
   maxTokens?: number;
+  /** 실효 이모지 레벨(0~3) — anti-ai 이모지 판정을 레벨 인지로 전환(§5). */
+  emojiLevel?: EmojiIntensity;
 }): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
   const zero = { bodyMd: opts.bodyMd, inTokens: 0, outTokens: 0, costCents: 0 };
   if (opts.model === "mock") return zero;
@@ -72,6 +76,7 @@ async function humanizeBody(opts: {
             brandName: opts.brandName,
             primaryKeyword: opts.primaryKeyword,
             minChars: opts.minChars,
+            emojiLevel: opts.emojiLevel,
           }),
         },
       ],
@@ -359,6 +364,9 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
     preferredLengthMax: p.preferredLengthMax,
     imagesPerPostMin: p.imagesPerPostMin,
     imagesPerPostMax: p.imagesPerPostMax,
+    emojiIntensity: (p.emojiIntensity === 0 || p.emojiIntensity === 1 || p.emojiIntensity === 2 || p.emojiIntensity === 3
+      ? p.emojiIntensity
+      : null) as PersonaInput["emojiIntensity"],
     notes: p.notes,
   };
 }
@@ -614,6 +622,7 @@ export async function generateDraftForBlog(
     primaryKeyword: topicRow!.primaryKeyword,
     minChars: humMinChars,
     maxTokens: bodyMaxTokens,
+    emojiLevel: resolveEmojiIntensity(persona).level,
   });
   /* --- Step 3.6: 발행 전 사실검증(fact-guard) — 근거 없는 구체 주장 걷어내기(업종 무관) ---
      누적 보강 정보도 확정 근거에 포함해 정상 확장을 허용한다. */
@@ -942,6 +951,7 @@ export async function generateDraftFromBrief(opts: {
     primaryKeyword,
     minChars: humMinChars,
     maxTokens: bodyMaxTokens,
+    emojiLevel: resolveEmojiIntensity(persona).level,
   });
   /* --- Step 3.6: 발행 전 사실검증(fact-guard) — 근거 없는 구체 주장 걷어내기(업종 무관) ---
      반자동은 사용자가 직접 입력한 brief 도 확정 사실 근거에 포함한다. */
@@ -1352,6 +1362,7 @@ export async function reviseDraftWithFeedback(opts: {
     primaryKeyword: persona.focusKeywords[0],
     minChars: humMinChars,
     maxTokens: reviseMaxTokens,
+    emojiLevel: resolveEmojiIntensity(persona).level,
   });
   parsed.bodyMd = hum.bodyMd;
 

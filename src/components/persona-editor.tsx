@@ -28,6 +28,8 @@ export type PersonaEditorValues = {
   preferredLengthMax: number;
   imagesPerPostMin: number;
   imagesPerPostMax: number;
+  /** 이모지 강도 0~3, null=자동(격식이면 1·그 외 2). */
+  emojiIntensity: 0 | 1 | 2 | 3 | null;
   sampleSnippets: string[];
   qualityRules: string[];
   notes: string;
@@ -59,6 +61,11 @@ export function PersonaEditor({
   const [formality, setFormality] = useState(persona.formality);
   const [ageGroup, setAgeGroup] = useState(persona.ageGroup ?? "");
   const [gender, setGender] = useState(persona.gender ?? "");
+  const [emojiIntensity, setEmojiIntensity] = useState(
+    persona.emojiIntensity === null || persona.emojiIntensity === undefined
+      ? ""
+      : String(persona.emojiIntensity)
+  );
 
   return (
     <form action={action} className="space-y-5 max-w-3xl">
@@ -190,6 +197,25 @@ export function PersonaEditor({
             />
             <input type="hidden" name="formality" value={formality} />
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label>이모지 강도</Label>
+          <SegmentChoice
+            value={emojiIntensity}
+            onChange={(v) => setEmojiIntensity(v)}
+            options={[
+              { value: "", label: "자동 (격식이면 절제·그 외 보통)" },
+              { value: "0", label: "없음 (전문·격식)" },
+              { value: "1", label: "절제 (1~2개)" },
+              { value: "2", label: "보통 (표준)" },
+              { value: "3", label: "적극 (후기·브이로그)" },
+            ]}
+          />
+          <input type="hidden" name="emojiIntensity" value={emojiIntensity} />
+          <p className="text-xs text-muted-foreground">
+            이모지는 감정이 실린 문장에만 넣습니다(정보·수치 문장 제외, 소제목 금지). ‘자동’은 격식/프리미엄 톤이면 레벨1(절제), 그 외 레벨2(보통)를 적용합니다.
+          </p>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-4">

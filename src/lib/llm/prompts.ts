@@ -28,8 +28,142 @@ export type PersonaInput = {
   preferredLengthMax: number;
   imagesPerPostMin: number;
   imagesPerPostMax: number;
+  /**
+   * 이모지 강도(0~3). null = 미지정(자동) — 격식/프리미엄이면 레벨1, 그 외 레벨2로 해석한다.
+   * 0~3 = 사용자 명시(최우선, 자동 하향 없음). 기본 표준값은 2. (스펙 §4)
+   */
+  emojiIntensity?: EmojiIntensity | null;
   notes: string | null;
 };
+
+/* ============================================================
+   이모지 강도 모듈 (스펙 emoji_intensity_spec.md §1~5)
+   이모지를 '있으면 AI티'가 아니라 '감정 지점의 인간화 신호'로 격상하되,
+   레벨(총량)과 위치 규칙(C1 균등분포 금지·C2 감정지점 집중·C4 문장당 1개)으로 남용을 막는다.
+   ============================================================ */
+
+export type EmojiIntensity = 0 | 1 | 2 | 3;
+
+type EmojiLevelSpec = {
+  targetCount: [number, number]; // 표준 글(1500~2500자) 기준 총 개수
+  allowBody: boolean; // 본문(정보 아닌 감정 강조 문장)에 허용?
+  perSentenceMax: number; // 한 문장 최대 개수(레벨3 절정만 예외 2)
+  tone: string;
+  placement: string; // 배치 지침(도입/본문/마무리)
+};
+
+export const EMOJI_LEVELS: Record<EmojiIntensity, EmojiLevelSpec> = {
+  0: {
+    targetCount: [0, 0],
+    allowBody: false,
+    perSentenceMax: 0,
+    tone: "전문·정보·프리미엄 격식",
+    placement: "이모지를 전혀 쓰지 않는다. 인간미는 이모지가 아니라 문장의 밀도·구체 수치·1인칭 경험으로 낸다.",
+  },
+  1: {
+    targetCount: [1, 2],
+    allowBody: false,
+    perSentenceMax: 1,
+    tone: "정보 중심 + 온기 한 스푼",
+    placement:
+      "글 전체에서 딱 1~2개만. 도입부와 마무리 중 감정이 실린 자리에만. 본문 정보 구간은 0개. 은은한 것 위주(🙂 💪 ☺️), 강한 정서(🔥😭🤣)는 지양.",
+  },
+  2: {
+    targetCount: [4, 6],
+    allowBody: true,
+    perSentenceMax: 1,
+    tone: "사람글 기본값 / 표준",
+    placement:
+      "도입 1 + 마무리 1 + 본문 강조 지점 2~4개(신나거나·확신하거나·공감하는 자리). 감정 없는 정보·수치·절차 문단은 계속 0개. 이모지 있는/없는 문단이 불규칙하게 섞이는 게 정상.",
+  },
+  3: {
+    targetCount: [8, 14],
+    allowBody: true,
+    perSentenceMax: 1, // 감정 절정 1~2회만 예외적으로 2개 허용
+    tone: "후기·브이로그·10~20대",
+    placement:
+      "도입·본문·마무리 전반에 걸쳐 감정 문장은 거의 이모지 동반. 그래도 순수 정보/수치/절차 문장은 비워 대비를 만든다. 감정 절정 1~2회에 한해 한 문장 2개 허용.",
+  },
+};
+
+/** 브랜드 톤이 격식/프리미엄인지 — 미지정 시 이모지 상한(레벨1) 권장 판정용(C6). */
+function isFormalOrPremium(p: PersonaInput): boolean {
+  if (p.formality === "formal") return true;
+  const hay = `${p.brandVoice ?? ""} ${p.notes ?? ""}`.toLowerCase();
+  return /프리미엄|럭셔리|고급|하이엔드|격식|premium|luxury/.test(hay);
+}
+
+/**
+ * 실효 이모지 레벨을 정한다(voice-dna 분기, 스펙 §4/③).
+ * - 사용자 명시(0~3) → 그대로 최우선(자동 하향 없음).
+ * - 미지정(null) + 격식/프리미엄 → 레벨1 상한 권장 + note 기록.
+ * - 미지정(null) + 캐주얼 → 레벨2(표준).
+ */
+export function resolveEmojiIntensity(p: PersonaInput): {
+  level: EmojiIntensity;
+  explicit: boolean;
+  note?: string;
+} {
+  const raw = p.emojiIntensity;
+  if (raw === 0 || raw === 1 || raw === 2 || raw === 3) {
+    return { level: raw, explicit: true };
+  }
+  if (isFormalOrPremium(p)) {
+    return {
+      level: 1,
+      explicit: false,
+      note: "격식/프리미엄 톤 → 이모지 레벨 1(절제) 기본 적용 (사용자 미지정, C6 상한 권장)",
+    };
+  }
+  return { level: 2, explicit: false };
+}
+
+/** 생성 프롬프트에 끼울 이모지 배치 지침 블록(레벨별 스위치). */
+export function emojiIntensityBlock(p: PersonaInput): string {
+  const { level, note } = resolveEmojiIntensity(p);
+  const s = EMOJI_LEVELS[level];
+  const lines: string[] = [`**이모지 사용 (레벨 ${level} — ${s.tone})**`];
+  if (level === 0) {
+    lines.push(`- 이모지를 전혀 쓰지 않는다(0개). ${s.placement}`);
+  } else {
+    const [min, max] = s.targetCount;
+    lines.push(
+      `- 이모지는 '감정이 실제로 올라오는 문장'에만 넣는다 — 정보·수치·절차·설명 문장에는 절대 넣지 마라.`,
+      `- 총량: 표준 글(1500~2500자) 기준 ${min}~${max}개(글이 길면 밀도 유지하며 비례 조정). ${s.placement}`,
+      `- 문단마다 균등하게 뿌리지 마라(C1). 이모지 없는 문단이 여러 개 연속되는 것이 정상이다.`,
+      `- 한 문장에 이모지 ${s.perSentenceMax}개까지(C4)${level === 3 ? " — 감정 절정 1~2회만 예외로 2개 허용" : ""}.`,
+      `- 문장 감정과 이모지 정서를 일치시킨다(C5). 슬픈 맥락에 웃는 이모지 금지.`,
+    );
+  }
+  // C3: 헤더 이모지는 전 레벨 금지.
+  lines.push(`- 소제목·헤더(## 앞뒤)에는 어느 레벨에서도 이모지 금지(C3). 이모지는 본문 문장 안에서만.`);
+  if (note) lines.push(`- (${note})`);
+  return lines.join("\n");
+}
+
+/**
+ * humanize/anti-ai 패스에 끼울 이모지 예외 규칙(스펙 §5).
+ * 전역 가이드의 '이모지 떡칠 금지'를 레벨 인지 규칙으로 덮어쓴다:
+ * 헤더 이모지는 P0 유지, 본문 이모지는 '총량·위치 규칙 위반'일 때만 교정한다.
+ */
+export function emojiAntiAiBlock(level: EmojiIntensity): string {
+  const s = EMOJI_LEVELS[level];
+  const lines = [
+    `## 이모지 판정 (레벨 ${level} — 전역 가이드의 '이모지 떡칠 금지'보다 우선 적용)`,
+    `- **소제목·헤더(## 앞뒤)의 장식 이모지는 무조건 제거한다(P0).** 이모지는 본문 문장 안에서만 허용.`,
+  ];
+  if (level === 0) {
+    lines.push(`- 이 글은 레벨 0(이모지 없음): 본문·헤더의 모든 이모지를 제거한다.`);
+  } else {
+    const [min, max] = s.targetCount;
+    lines.push(
+      `- 본문 이모지는 '있다는 것 자체'로 지우지 마라. 감정이 실린 문장에 붙은 이모지는 인간화 신호이니 보존한다.`,
+      `- 다음 '위치·총량 규칙 위반'일 때만 교정한다: (C1) 문단마다 균등하게 뿌려짐 → 정보 문단 침범분부터 제거 · (C2) 정보·수치·절차 문장에 붙음 → 제거 · (C4) 한 문장에 ${s.perSentenceMax}개 초과 → 초과분 제거${level === 3 ? "(감정 절정 1~2회 2개는 허용)" : ""} · 총량이 ${min}~${max}개(표준 글 기준)를 크게 초과 → 정보 문단 침범분부터 우선 제거.`,
+      `- 총량이 부족하다고 억지로 추가하지는 마라. 위치가 맞으면 그대로 둔다.`,
+    );
+  }
+  return lines.join("\n");
+}
 
 export function personaPreamble(p: PersonaInput) {
   const povLabel =
@@ -93,6 +227,7 @@ export function personaPreamble(p: PersonaInput) {
           .join("\n\n")}`
       : null,
     p.notes ? `**기타 컨텍스트**: ${p.notes}` : null,
+    emojiIntensityBlock(p),
   ]
     .filter(Boolean)
     .join("\n");
@@ -872,6 +1007,8 @@ export function humanizePrompt(opts: {
   primaryKeyword?: string;
   /** 분량 늘리기 반려 직후 호출 시, 이 글자수(공백 제외) 미만으로 줄이지 못하게 한다. */
   minChars?: number;
+  /** 실효 이모지 레벨(0~3). 있으면 전역 가이드의 '이모지 떡칠 금지'를 레벨 인지 규칙으로 덮어쓴다(§5). */
+  emojiLevel?: EmojiIntensity;
 }) {
   return [
     `# 작업: 아래 블로그 초안에서 'AI가 쓴 티'를 전부 걷어내고, 진짜 사람이 직접 쓴 것처럼 다시 써라.`,
@@ -880,6 +1017,8 @@ export function humanizePrompt(opts: {
     `## 반드시 제거할 AI 티 패턴 (하나도 남기지 마라)`,
     opts.rules.trim(),
     ``,
+    typeof opts.emojiLevel === "number" ? emojiAntiAiBlock(opts.emojiLevel) : null,
+    typeof opts.emojiLevel === "number" ? `` : null,
     opts.brandName || opts.primaryKeyword
       ? `## 상호 / 키워드 교정 (중요)`
       : null,

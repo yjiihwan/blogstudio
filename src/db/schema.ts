@@ -111,6 +111,11 @@ export const personas = sqliteTable("personas", {
   imagesPerPostMin: integer("images_per_post_min").notNull().default(3),
   imagesPerPostMax: integer("images_per_post_max").notNull().default(8),
 
+  /* === 이모지 강도(0~3) ===
+     null = 미지정(자동): 격식/프리미엄 톤이면 레벨1, 그 외 레벨2로 해석.
+     0~3 = 사용자 명시(최우선). 표준 기본값은 2. (emoji_intensity_spec §4) */
+  emojiIntensity: integer("emoji_intensity"),
+
   /* === Sample writing (used as style reference for the LLM) === */
   sampleSnippetsJson: text("sample_snippets_json").notNull().default("[]"),
 
