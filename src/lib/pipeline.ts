@@ -30,6 +30,7 @@ import {
   augmentedPreamble,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
+import { sanitizeBody } from "./markdown";
 import { sendTelegramToUser } from "./telegram";
 import { globalGuideBlock, getGlobalWritingGuide } from "./global-guide";
 import { saveImageBuffer } from "./storage";
@@ -632,7 +633,8 @@ export async function generateDraftForBlog(
     model: bodyRes.model,
     maxTokens: bodyMaxTokens,
   });
-  const bodyMd = guard.bodyMd;
+  // 최종 분리: 작성 지시문·내부 메모가 본문에 새어든 흔적 제거(독자 노출 방지).
+  const bodyMd = sanitizeBody(guard.bodyMd);
 
   /* --- Step 4: score --- */
   const seo = scoreSeo({
@@ -960,7 +962,8 @@ export async function generateDraftFromBrief(opts: {
     model: bodyRes.model,
     maxTokens: bodyMaxTokens,
   });
-  const bodyMd = guard.bodyMd;
+  // 최종 분리: 작성 지시문·내부 메모가 본문에 새어든 흔적 제거(독자 노출 방지).
+  const bodyMd = sanitizeBody(guard.bodyMd);
 
   /* --- Step 4: score --- */
   const seo = scoreSeo({
