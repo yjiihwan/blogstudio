@@ -28,6 +28,13 @@ import {
   limitationNotice,
   buildAugmentationRequest,
   augmentedPreamble,
+  resolveEmojiIntensity,
+  type EmojiIntensity,
+  resolveWritingTemplate,
+  reviewChecklist,
+  reviewRubricPrompt,
+  reviewRewritePrompt,
+  deriveSpeakerPersona,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
@@ -52,6 +59,8 @@ async function humanizeBody(opts: {
   minChars?: number;
   /** 큰 본문은 기본 4096토큰에서 잘리므로 호출부가 천장을 올려 전달한다. */
   maxTokens?: number;
+  /** 실효 이모지 레벨(0~3) — anti-ai 이모지 판정을 레벨 인지로 전환(§5). */
+  emojiLevel?: EmojiIntensity;
 }): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
   const zero = { bodyMd: opts.bodyMd, inTokens: 0, outTokens: 0, costCents: 0 };
   if (opts.model === "mock") return zero;
@@ -72,6 +81,7 @@ async function humanizeBody(opts: {
             brandName: opts.brandName,
             primaryKeyword: opts.primaryKeyword,
             minChars: opts.minChars,
+            emojiLevel: opts.emojiLevel,
           }),
         },
       ],
@@ -190,6 +200,176 @@ async function factGuardBody(opts: {
 
   const forbiddenHits = findForbiddenTopicHits(`${opts.title}\n${cur}`, forbidden);
   return { bodyMd: cur, removed: removedAll, forbiddenHits, inTokens, outTokens, costCents };
+}
+
+const IMG_MARKER_RE = /<!--\s*IMG:slot=\d+\s*-->/g;
+
+/**
+ * 개정 가이드 자가검증 게이트(review_v1 전용). §4 결정론 체크리스트 + §7 LLM 루브릭으로
+ * '사람다움'을 검사하고, 미충족(필수요소 미달 또는 루브릭 7점 미만)이면 한 번 재작성한다.
+ * standard 템플릿·mock·가이드 비활성이면 통과(원본 유지). 이미지 마커 유실/과도 축소면 원본 유지.
+ * 결과 issues 는 seoIssues 에 얹혀 검수자에게 노출된다.
+ */
+async function reviewVerifyPass(opts: {
+  persona: PersonaInput;
+  bodyMd: string;
+  title: string;
+  preamble: string;
+  callerUserId?: string;
+  model: string;
+  maxTokens?: number;
+  primaryKeyword?: string;
+  minChars?: number;
+}): Promise<{
+  bodyMd: string;
+  rubricScore: number | null;
+  issues: string[];
+  rewritten: boolean;
+  inTokens: number;
+  outTokens: number;
+  costCents: number;
+}> {
+  const passthrough = {
+    bodyMd: opts.bodyMd,
+    rubricScore: null as number | null,
+    issues: [] as string[],
+    rewritten: false,
+    inTokens: 0,
+    outTokens: 0,
+    costCents: 0,
+  };
+  if (resolveWritingTemplate(opts.persona) !== "review_v1") return passthrough;
+  if (opts.model === "mock") return passthrough;
+  const guide = await getGlobalWritingGuide();
+  if (!guide.enabled || !guide.text.trim()) return passthrough;
+
+  const level = resolveEmojiIntensity(opts.persona).level;
+  const speaker = deriveSpeakerPersona(opts.persona);
+  let inTokens = 0;
+  let outTokens = 0;
+  let costCents = 0;
+
+  const evaluate = async (body: string) => {
+    const imgCount = (body.match(IMG_MARKER_RE) || []).length;
+    const det = reviewChecklist({ bodyMd: body, imgMarkerCount: imgCount, emojiLevel: level });
+    let rubricScore: number | null = null;
+    let rubricIssues: string[] = [];
+    try {
+      const res = await llm({
+        system: opts.preamble,
+        callerUserId: opts.callerUserId,
+        maxTokens: 900,
+        messages: [
+          { role: "user", content: reviewRubricPrompt({ title: opts.title, bodyMd: body, speaker }) },
+        ],
+      });
+      inTokens += res.inputTokens;
+      outTokens += res.outputTokens;
+      costCents += res.costCents;
+      const parsed = safeJson<{ score?: number; issues?: string[] }>(res.text);
+      if (parsed && typeof parsed.score === "number") rubricScore = parsed.score;
+      if (parsed && Array.isArray(parsed.issues)) {
+        rubricIssues = parsed.issues.filter((s) => typeof s === "string" && s.trim()).slice(0, 6);
+      }
+    } catch {
+      // 루브릭 호출 실패 시 결정론 체크리스트만으로 판정한다.
+    }
+    const belowRubric = rubricScore !== null && rubricScore < REVIEW_V1_PASS;
+    const pass = det.failed.length === 0 && !belowRubric;
+    return { det, rubricScore, rubricIssues, pass };
+  };
+
+  const first = await evaluate(opts.bodyMd);
+  if (first.pass) {
+    return { ...passthrough, rubricScore: first.rubricScore, inTokens, outTokens, costCents };
+  }
+
+  // 미달 → 지적사항을 담아 한 번 재작성 후 재평가. 개선되면 채택, 아니면 원본 유지.
+  let finalBody = opts.bodyMd;
+  let rewritten = false;
+  try {
+    const res = await llm({
+      system: opts.preamble,
+      callerUserId: opts.callerUserId,
+      maxTokens: opts.maxTokens,
+      messages: [
+        {
+          role: "user",
+          content: reviewRewritePrompt({
+            title: opts.title,
+            bodyMd: opts.bodyMd,
+            persona: opts.persona,
+            failedChecks: first.det.failed,
+            rubricIssues: first.rubricIssues,
+            primaryKeyword: opts.primaryKeyword,
+            minChars: opts.minChars,
+          }),
+        },
+      ],
+    });
+    inTokens += res.inputTokens;
+    outTokens += res.outputTokens;
+    costCents += res.costCents;
+    const out = res.text
+      .trim()
+      .replace(/^```(?:markdown)?/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    const origImgs = (opts.bodyMd.match(IMG_MARKER_RE) || []).length;
+    const newImgs = (out.match(IMG_MARKER_RE) || []).length;
+    const outChars = out.replace(/\s+/g, "").length;
+    const floor = opts.minChars ? opts.minChars * 0.9 : opts.bodyMd.replace(/\s+/g, "").length * 0.6;
+    // 이미지 마커 보존 + 과도 축소 아님일 때만 재작성본 재평가.
+    if (newImgs >= origImgs && outChars >= floor && out.length > 50) {
+      const second = await evaluate(out);
+      // 재작성이 결정론 미달 수를 줄였거나 루브릭 점수를 올렸으면 채택.
+      const improved =
+        second.det.failed.length < first.det.failed.length ||
+        (second.rubricScore ?? 0) > (first.rubricScore ?? 0) ||
+        second.pass;
+      if (improved) {
+        finalBody = out;
+        rewritten = true;
+        return {
+          bodyMd: finalBody,
+          rubricScore: second.rubricScore,
+          issues: buildReviewIssues(second.det.failed, second.rubricScore, second.rubricIssues),
+          rewritten,
+          inTokens,
+          outTokens,
+          costCents,
+        };
+      }
+    }
+  } catch {
+    // 재작성 실패 → 원본 유지 + 1차 판정 issues 노출.
+  }
+
+  return {
+    bodyMd: finalBody,
+    rubricScore: first.rubricScore,
+    issues: buildReviewIssues(first.det.failed, first.rubricScore, first.rubricIssues),
+    rewritten,
+    inTokens,
+    outTokens,
+    costCents,
+  };
+}
+
+const REVIEW_V1_PASS = 7; // §7: 7점 미만 재작성
+
+/** 검수자 노출용 issue 라벨 조립(seoIssues 에 얹음). */
+function buildReviewIssues(
+  failed: string[],
+  rubricScore: number | null,
+  rubricIssues: string[]
+): string[] {
+  const out: string[] = [];
+  if (failed.length) out.push(`📝 후기 필수요소 미충족: ${failed.join(", ")}`);
+  if (rubricScore !== null && rubricScore < REVIEW_V1_PASS) {
+    out.push(`📝 사람다움 루브릭 ${rubricScore}/10 (기준 ${REVIEW_V1_PASS})${rubricIssues.length ? ` — ${rubricIssues.slice(0, 3).join(" / ")}` : ""}`);
+  }
+  return out;
 }
 
 /**
@@ -359,6 +539,9 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
     preferredLengthMax: p.preferredLengthMax,
     imagesPerPostMin: p.imagesPerPostMin,
     imagesPerPostMax: p.imagesPerPostMax,
+    emojiIntensity: (p.emojiIntensity === 0 || p.emojiIntensity === 1 || p.emojiIntensity === 2 || p.emojiIntensity === 3
+      ? p.emojiIntensity
+      : null) as PersonaInput["emojiIntensity"],
     notes: p.notes,
   };
 }
@@ -614,6 +797,7 @@ export async function generateDraftForBlog(
     primaryKeyword: topicRow!.primaryKeyword,
     minChars: humMinChars,
     maxTokens: bodyMaxTokens,
+    emojiLevel: resolveEmojiIntensity(persona).level,
   });
   /* --- Step 3.6: 발행 전 사실검증(fact-guard) — 근거 없는 구체 주장 걷어내기(업종 무관) ---
      누적 보강 정보도 확정 근거에 포함해 정상 확장을 허용한다. */
@@ -634,7 +818,21 @@ export async function generateDraftForBlog(
     maxTokens: bodyMaxTokens,
   });
   // 최종 분리: 작성 지시문·내부 메모가 본문에 새어든 흔적 제거(독자 노출 방지).
-  const bodyMd = sanitizeBody(guard.bodyMd);
+  const sanitized = sanitizeBody(guard.bodyMd);
+
+  /* --- Step 3.7: 개정 가이드 자가검증 게이트(review_v1) — 미달 시 1회 재작성 --- */
+  const review = await reviewVerifyPass({
+    persona,
+    bodyMd: sanitized,
+    title: topicRow!.title,
+    preamble,
+    callerUserId,
+    model: bodyRes.model,
+    maxTokens: bodyMaxTokens,
+    primaryKeyword: topicRow!.primaryKeyword,
+    minChars: lengthTarget ? Math.round(sanitized.replace(/\s+/g, "").length * 0.9) : undefined,
+  });
+  const bodyMd = sanitizeBody(review.bodyMd);
 
   /* --- Step 4: score --- */
   const seo = scoreSeo({
@@ -652,11 +850,11 @@ export async function generateDraftForBlog(
   });
 
   const totalInTokens =
-    topicInTokens + outlineRes.inputTokens + bodyInTokens + hum.inTokens + guard.inTokens;
+    topicInTokens + outlineRes.inputTokens + bodyInTokens + hum.inTokens + guard.inTokens + review.inTokens;
   const totalOutTokens =
-    topicOutTokens + outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens;
+    topicOutTokens + outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens + review.outTokens;
   const totalCostCents =
-    topicCostCents + outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents;
+    topicCostCents + outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
 
   /* 발행 전 게이트(업종 무관): 사실검증 후에도 근거 없는 구체 주장(가격·수치·연혁·수상·규모·없는시설)이
      남았는지 결정론 검사해 플래그한다. 검수자가 카드에서 바로 인지하도록 seoIssues에 얹는다(비차단). */
@@ -709,6 +907,7 @@ export async function generateDraftForBlog(
         ...(fabHits.length
           ? [`⚠️ 미검증 주장 잔존: ${fabHits.map((h) => h.match).join(", ")} (사실 확인 필요)`]
           : []),
+        ...review.issues,
         ...(limitationFlag ? [limitationFlag] : []),
       ]),
       humanScore: human.score,
@@ -942,6 +1141,7 @@ export async function generateDraftFromBrief(opts: {
     primaryKeyword,
     minChars: humMinChars,
     maxTokens: bodyMaxTokens,
+    emojiLevel: resolveEmojiIntensity(persona).level,
   });
   /* --- Step 3.6: 발행 전 사실검증(fact-guard) — 근거 없는 구체 주장 걷어내기(업종 무관) ---
      반자동은 사용자가 직접 입력한 brief 도 확정 사실 근거에 포함한다. */
@@ -963,7 +1163,21 @@ export async function generateDraftFromBrief(opts: {
     maxTokens: bodyMaxTokens,
   });
   // 최종 분리: 작성 지시문·내부 메모가 본문에 새어든 흔적 제거(독자 노출 방지).
-  const bodyMd = sanitizeBody(guard.bodyMd);
+  const sanitized = sanitizeBody(guard.bodyMd);
+
+  /* --- Step 3.7: 개정 가이드 자가검증 게이트(review_v1) — 미달 시 1회 재작성 --- */
+  const review = await reviewVerifyPass({
+    persona,
+    bodyMd: sanitized,
+    title,
+    preamble,
+    callerUserId: opts.callerUserId,
+    model: bodyRes.model,
+    maxTokens: bodyMaxTokens,
+    primaryKeyword,
+    minChars: lengthTarget ? Math.round(sanitized.replace(/\s+/g, "").length * 0.9) : undefined,
+  });
+  const bodyMd = sanitizeBody(review.bodyMd);
 
   /* --- Step 4: score --- */
   const seo = scoreSeo({
@@ -999,9 +1213,9 @@ export async function generateDraftFromBrief(opts: {
     limitationFlag = limitationFlag ?? limitationNotice(["material"]);
   }
 
-  const totalInTokens = outlineRes.inputTokens + bodyInTokens + hum.inTokens + guard.inTokens;
-  const totalOutTokens = outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens;
-  const totalCostCents = outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents;
+  const totalInTokens = outlineRes.inputTokens + bodyInTokens + hum.inTokens + guard.inTokens + review.inTokens;
+  const totalOutTokens = outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens + review.outTokens;
+  const totalCostCents = outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
 
   /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
   const draftValues = {
@@ -1026,6 +1240,7 @@ export async function generateDraftFromBrief(opts: {
         ...(fabHits.length
           ? [`⚠️ 미검증 주장 잔존: ${fabHits.map((h) => h.match).join(", ")} (사실 확인 필요)`]
           : []),
+        ...review.issues,
         ...(limitationFlag ? [limitationFlag] : []),
       ]),
       humanScore: human.score,
@@ -1352,6 +1567,7 @@ export async function reviseDraftWithFeedback(opts: {
     primaryKeyword: persona.focusKeywords[0],
     minChars: humMinChars,
     maxTokens: reviseMaxTokens,
+    emojiLevel: resolveEmojiIntensity(persona).level,
   });
   parsed.bodyMd = hum.bodyMd;
 

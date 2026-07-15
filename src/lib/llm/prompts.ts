@@ -28,8 +28,378 @@ export type PersonaInput = {
   preferredLengthMax: number;
   imagesPerPostMin: number;
   imagesPerPostMax: number;
+  /**
+   * 이모지 강도(0~3). null = 미지정(자동) — 격식/프리미엄이면 레벨1, 그 외 레벨2로 해석한다.
+   * 0~3 = 사용자 명시(최우선, 자동 하향 없음). 기본 표준값은 2. (스펙 §4)
+   */
+  emojiIntensity?: EmojiIntensity | null;
+  /**
+   * 글쓰기 템플릿. null/미지정 = 자동(고객 1인칭 경험담 → review_v1, 그 외 standard).
+   * review_v1 = 개정 가이드(화자·증거·솔직한 흠 + 자가검증 게이트). (writing_guide_revision_spec §2/§6)
+   */
+  writingTemplate?: WritingTemplate | null;
+  /** 화자 페르소나 명시 override(사용자 입력 우선). 없으면 pointOfView/niche에서 도출. (축A) */
+  speakerPersona?: SpeakerPersona | null;
   notes: string | null;
 };
+
+/* ============================================================
+   이모지 강도 모듈 (스펙 emoji_intensity_spec.md §1~5)
+   이모지를 '있으면 AI티'가 아니라 '감정 지점의 인간화 신호'로 격상하되,
+   레벨(총량)과 위치 규칙(C1 균등분포 금지·C2 감정지점 집중·C4 문장당 1개)으로 남용을 막는다.
+   ============================================================ */
+
+export type EmojiIntensity = 0 | 1 | 2 | 3;
+
+type EmojiLevelSpec = {
+  targetCount: [number, number]; // 표준 글(1500~2500자) 기준 총 개수
+  allowBody: boolean; // 본문(정보 아닌 감정 강조 문장)에 허용?
+  perSentenceMax: number; // 한 문장 최대 개수(레벨3 절정만 예외 2)
+  tone: string;
+  placement: string; // 배치 지침(도입/본문/마무리)
+};
+
+export const EMOJI_LEVELS: Record<EmojiIntensity, EmojiLevelSpec> = {
+  0: {
+    targetCount: [0, 0],
+    allowBody: false,
+    perSentenceMax: 0,
+    tone: "전문·정보·프리미엄 격식",
+    placement: "이모지를 전혀 쓰지 않는다. 인간미는 이모지가 아니라 문장의 밀도·구체 수치·1인칭 경험으로 낸다.",
+  },
+  1: {
+    targetCount: [1, 2],
+    allowBody: false,
+    perSentenceMax: 1,
+    tone: "정보 중심 + 온기 한 스푼",
+    placement:
+      "글 전체에서 딱 1~2개만. 도입부와 마무리 중 감정이 실린 자리에만. 본문 정보 구간은 0개. 은은한 것 위주(🙂 💪 ☺️), 강한 정서(🔥😭🤣)는 지양.",
+  },
+  2: {
+    targetCount: [4, 6],
+    allowBody: true,
+    perSentenceMax: 1,
+    tone: "사람글 기본값 / 표준",
+    placement:
+      "도입 1 + 마무리 1 + 본문 강조 지점 2~4개(신나거나·확신하거나·공감하는 자리). 감정 없는 정보·수치·절차 문단은 계속 0개. 이모지 있는/없는 문단이 불규칙하게 섞이는 게 정상.",
+  },
+  3: {
+    targetCount: [8, 14],
+    allowBody: true,
+    perSentenceMax: 1, // 감정 절정 1~2회만 예외적으로 2개 허용
+    tone: "후기·브이로그·10~20대",
+    placement:
+      "도입·본문·마무리 전반에 걸쳐 감정 문장은 거의 이모지 동반. 그래도 순수 정보/수치/절차 문장은 비워 대비를 만든다. 감정 절정 1~2회에 한해 한 문장 2개 허용.",
+  },
+};
+
+/** 브랜드 톤이 격식/프리미엄인지 — 미지정 시 이모지 상한(레벨1) 권장 판정용(C6). */
+function isFormalOrPremium(p: PersonaInput): boolean {
+  if (p.formality === "formal") return true;
+  const hay = `${p.brandVoice ?? ""} ${p.notes ?? ""}`.toLowerCase();
+  return /프리미엄|럭셔리|고급|하이엔드|격식|premium|luxury/.test(hay);
+}
+
+/**
+ * 실효 이모지 레벨을 정한다(voice-dna 분기, 스펙 §4/③).
+ * - 사용자 명시(0~3) → 그대로 최우선(자동 하향 없음).
+ * - 미지정(null) + 격식/프리미엄 → 레벨1 상한 권장 + note 기록.
+ * - 미지정(null) + 캐주얼 → 레벨2(표준).
+ */
+export function resolveEmojiIntensity(p: PersonaInput): {
+  level: EmojiIntensity;
+  explicit: boolean;
+  note?: string;
+} {
+  const raw = p.emojiIntensity;
+  if (raw === 0 || raw === 1 || raw === 2 || raw === 3) {
+    return { level: raw, explicit: true };
+  }
+  if (isFormalOrPremium(p)) {
+    return {
+      level: 1,
+      explicit: false,
+      note: "격식/프리미엄 톤 → 이모지 레벨 1(절제) 기본 적용 (사용자 미지정, C6 상한 권장)",
+    };
+  }
+  return { level: 2, explicit: false };
+}
+
+/** 생성 프롬프트에 끼울 이모지 배치 지침 블록(레벨별 스위치). */
+export function emojiIntensityBlock(p: PersonaInput): string {
+  const { level, note } = resolveEmojiIntensity(p);
+  const s = EMOJI_LEVELS[level];
+  const lines: string[] = [`**이모지 사용 (레벨 ${level} — ${s.tone})**`];
+  if (level === 0) {
+    lines.push(`- 이모지를 전혀 쓰지 않는다(0개). ${s.placement}`);
+  } else {
+    const [min, max] = s.targetCount;
+    lines.push(
+      `- 이모지는 '감정이 실제로 올라오는 문장'에만 넣는다 — 정보·수치·절차·설명 문장에는 절대 넣지 마라.`,
+      `- 총량: 표준 글(1500~2500자) 기준 ${min}~${max}개(글이 길면 밀도 유지하며 비례 조정). ${s.placement}`,
+      `- 문단마다 균등하게 뿌리지 마라(C1). 이모지 없는 문단이 여러 개 연속되는 것이 정상이다.`,
+      `- 한 문장에 이모지 ${s.perSentenceMax}개까지(C4)${level === 3 ? " — 감정 절정 1~2회만 예외로 2개 허용" : ""}.`,
+      `- 문장 감정과 이모지 정서를 일치시킨다(C5). 슬픈 맥락에 웃는 이모지 금지.`,
+    );
+  }
+  // C3: 헤더 이모지는 전 레벨 금지.
+  lines.push(`- 소제목·헤더(## 앞뒤)에는 어느 레벨에서도 이모지 금지(C3). 이모지는 본문 문장 안에서만.`);
+  if (note) lines.push(`- (${note})`);
+  return lines.join("\n");
+}
+
+/**
+ * humanize/anti-ai 패스에 끼울 이모지 예외 규칙(스펙 §5).
+ * 전역 가이드의 '이모지 떡칠 금지'를 레벨 인지 규칙으로 덮어쓴다:
+ * 헤더 이모지는 P0 유지, 본문 이모지는 '총량·위치 규칙 위반'일 때만 교정한다.
+ */
+export function emojiAntiAiBlock(level: EmojiIntensity): string {
+  const s = EMOJI_LEVELS[level];
+  const lines = [
+    `## 이모지 판정 (레벨 ${level} — 전역 가이드의 '이모지 떡칠 금지'보다 우선 적용)`,
+    `- **소제목·헤더(## 앞뒤)의 장식 이모지는 무조건 제거한다(P0).** 이모지는 본문 문장 안에서만 허용.`,
+  ];
+  if (level === 0) {
+    lines.push(`- 이 글은 레벨 0(이모지 없음): 본문·헤더의 모든 이모지를 제거한다.`);
+  } else {
+    const [min, max] = s.targetCount;
+    lines.push(
+      `- 본문 이모지는 '있다는 것 자체'로 지우지 마라. 감정이 실린 문장에 붙은 이모지는 인간화 신호이니 보존한다.`,
+      `- 다음 '위치·총량 규칙 위반'일 때만 교정한다: (C1) 문단마다 균등하게 뿌려짐 → 정보 문단 침범분부터 제거 · (C2) 정보·수치·절차 문장에 붙음 → 제거 · (C4) 한 문장에 ${s.perSentenceMax}개 초과 → 초과분 제거${level === 3 ? "(감정 절정 1~2회 2개는 허용)" : ""} · 총량이 ${min}~${max}개(표준 글 기준)를 크게 초과 → 정보 문단 침범분부터 우선 제거.`,
+      `- 총량이 부족하다고 억지로 추가하지는 마라. 위치가 맞으면 그대로 둔다.`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/* ============================================================
+   개정 글쓰기 가이드 모듈 (writing_guide_revision_spec.md §1~7)
+   "기계 티" 제거 3축: 화자(A)·증거(B)·문체(C) + review_v1 섹션 템플릿(§2) +
+   자가검증 게이트(§4 결정론 체크리스트 · §7 LLM 루브릭 → 미달 시 재작성).
+   활성화: 고객 1인칭 경험담(후기)에 자동. 운영자/전문가/3인칭 글엔 '솔직한 흠·방문 계기'가
+   부적합하므로 적용하지 않는다(standard). persona.writingTemplate 로 명시 override.
+   ============================================================ */
+
+export type WritingTemplate = "review_v1" | "standard";
+export type SpeakerPersona = { type: string; context: string };
+
+export const REVIEW_V1 = {
+  evidenceMin: 3,
+  photoSlotsMin: 3,
+  requireHonestFlaw: true,
+  rubricPassScore: 7, // §7: 7점 미만이면 재작성
+  evidenceCategories: ["시설/규모", "기구", "가격", "PT/트레이너", "청결/관리", "비교"],
+  sections: [
+    "도입 — 화자 등판(자기소개 + 개인 맥락 + 왜 이 글을 쓰는지). 일반론 도입 금지.",
+    "계기/방문 배경 — 어쩌다 알게 됐나·뭘 기대했나(개인 서사).",
+    "본문1 — 첫인상·시설·규모(사진 슬롯 + 감각 디테일).",
+    "본문2 — 기구·PT·가격(실제 명칭·금액·상담 장면 + 사진 슬롯).",
+    "본문3 — 솔직한 흠 1가지(짧게, 신뢰장치).",
+    "마무리 — 감정 착지 + 추천 대상(다짐/여운).",
+  ],
+} as const;
+
+/** 실효 글쓰기 템플릿(§2). 명시 override 우선, 미지정이면 1인칭 경험담만 review_v1. */
+export function resolveWritingTemplate(p: PersonaInput): WritingTemplate {
+  if (p.writingTemplate === "review_v1" || p.writingTemplate === "standard") return p.writingTemplate;
+  return p.pointOfView === "first_person" ? "review_v1" : "standard";
+}
+
+const POV_SPEAKER: Record<PersonaInput["pointOfView"], string> = {
+  first_person: "직접 겪은 고객·방문자",
+  owner: "이 업체를 운영·근무하는 사람",
+  expert: "해당 분야 전문가",
+  third_person: "관찰자",
+};
+
+/** 화자 페르소나(축A) — 명시 override 우선, 없으면 pointOfView/niche/audience에서 도출. */
+export function deriveSpeakerPersona(p: PersonaInput): SpeakerPersona {
+  if (p.speakerPersona?.type?.trim()) {
+    return {
+      type: p.speakerPersona.type.trim(),
+      context: (p.speakerPersona.context ?? "").trim(),
+    };
+  }
+  const type = POV_SPEAKER[p.pointOfView] ?? "글쓴이";
+  const bits = [p.niche?.trim(), p.audience?.trim()].filter(Boolean) as string[];
+  const context = bits.length ? bits.join(" · ") : (p.purpose?.trim() ?? "");
+  return { type, context };
+}
+
+/** 브로슈어·과시 문체 결정론 검출(§5 anti-ai 신규). '자랑합니다/완비/자부' 류. */
+const BROCHURE_PATTERNS: RegExp[] = [
+  /자랑합니다/,
+  /자부합니다/,
+  /완비(하고|되어|했|하였)/,
+  /명실상부/,
+  /최상의\s*서비스/,
+  /최고급(을|의)?\s*(시설|서비스|경험)/,
+  /고객\s*만족을?\s*위(해|하여)/,
+  /프리미엄을?\s*(선사|제공)/,
+  /차별화된\s*(서비스|경험|시설)/,
+];
+export function detectBrochureTone(text: string): string[] {
+  const hits = new Set<string>();
+  for (const re of BROCHURE_PATTERNS) {
+    const m = text.match(re);
+    if (m) hits.add(m[0].trim());
+  }
+  return [...hits];
+}
+
+/** 생성/재작성 프롬프트에 끼울 review_v1 지침 블록(축A·B·C + §2 순서 + [슬롯] 강제). */
+export function reviewSpecBlock(p: PersonaInput): string {
+  const sp = deriveSpeakerPersona(p);
+  const ev = REVIEW_V1.evidenceCategories.join(" / ");
+  return [
+    `## 개정 글쓰기 가이드 (review_v1 — '기계 티' 제거, 아래를 반드시 지켜 쓴다)`,
+    `**화자(축A)**: 너는 "${sp.type}"다${sp.context ? `(${sp.context})` : ""}. 도입 2~4문장 안에 (1)네가 누구인지 (2)이 글을 쓰는 개인적 계기를 밝혀라. 일반론 도입("헬스장 고를 때 중요한 것", "요즘 운동이 대세") 절대 금지 — 자기 폭로성 개인 디테일(예: 저녁마다 벤치 대기, 주말 폭식, 이사·복귀)로 실존 인물처럼 연다.`,
+    `**증거(축B)**: 지점명·키워드 도배 대신 겪은 사람만 아는 구체 증거를 최소 ${REVIEW_V1.evidenceMin}종 박아라 — 카테고리: ${ev}. 실제 고유명사·수치로 쓰되, ⚠️확인되지 않은 수치(가격·기구 브랜드·규모·주차 대수 등)는 절대 지어내지 말고 \`[슬롯: 항목]\` 형태 플레이스홀더로 비워라(예: \`[슬롯: 12개월 월 회비]\`, \`[슬롯: 핵스쿼트 실제 브랜드명]\`). 운영자가 나중에 실제 값으로 채운다.`,
+    `**사진 슬롯**: 사진이 들어갈 자리에 \`<!-- IMG:slot=N -->\` 마커를 최소 ${REVIEW_V1.photoSlotsMin}개, 내용이 맞는 문단 뒤에 배치한다.`,
+    REVIEW_V1.requireHonestFlaw
+      ? `**솔직한 흠(신뢰장치)**: 아쉬운 점 1가지를 짧게 반드시 넣어라(붐비는 시간대·주차 불편 등). 흠 하나 없는 완벽 찬양은 광고로 읽혀 오히려 신뢰를 깎는다(단, 없는 단점을 지어내진 마라).`
+      : null,
+    `**감정 흐름(축C)**: 도입(공감/설렘·의심) → 중반(작은 실망·반전) → 후반(확신·만족·다짐) 곡선을 만들어라. 평평한 정보 나열 금지. 정보(시설·가격·수치)는 담백하게, 감정·서사 구간에만 온도를 실어라(이모지도 위 이모지 규칙대로 감정 지점에만).`,
+    `**섹션 순서(소제목 문구는 톤에 맞게 변주하되 순서·기능 유지)**:`,
+    ...REVIEW_V1.sections.map((s, i) => `  ${i + 1}. ${s}`),
+    `**문체 상한**: 브로슈어·과시 문체("최고급을 자랑합니다/완비하고 있습니다") 금지 — 경험자 증언("장비 세팅이 확실히 다르더라고요")으로. 1인칭("저는/제가") 끝까지 유지. 상투 마무리("도움이 되셨길 바랍니다") 금지.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export type ReviewCheck = { key: string; ok: boolean; label: string; detail?: string };
+
+/**
+ * §4 필수요소 중 '결정론으로 검증 가능한' 항목 게이트(순수 함수).
+ * LLM 루브릭(§7)과 함께 재작성 트리거로 쓴다. 미충족 라벨을 failed 로 돌려준다.
+ */
+export function reviewChecklist(opts: {
+  bodyMd: string;
+  imgMarkerCount: number;
+  emojiLevel: EmojiIntensity;
+}): { checks: ReviewCheck[]; failed: string[] } {
+  const body = opts.bodyMd ?? "";
+  const checks: ReviewCheck[] = [];
+  const push = (key: string, ok: boolean, label: string, detail?: string) =>
+    checks.push({ key, ok, label, detail });
+
+  // 1인칭 시점 유지
+  push("first_person", /저는|제가|제\s|저희/.test(body), "1인칭 시점(저는/제가)");
+
+  // 사진 슬롯 ≥ 3
+  push(
+    "photo_slots",
+    opts.imgMarkerCount >= REVIEW_V1.photoSlotsMin,
+    `사진 슬롯 ${REVIEW_V1.photoSlotsMin}개 이상`,
+    `${opts.imgMarkerCount}개`
+  );
+
+  // 솔직한 흠 신호어
+  const flaw =
+    /(아쉬(운|웠|워|움)|단점|불편|붐비|기다려|대기(라|가|를)?|다만|한 가지 흠|주차(가|는|도)?\s*(좀|불편|넉넉|부족|아쉬))/.test(
+      body
+    );
+  push("honest_flaw", flaw, "솔직한 흠 1가지");
+
+  // 브로슈어·과시 문체 부재
+  const brochure = detectBrochureTone(body);
+  push("no_brochure", brochure.length === 0, "브로슈어·과시 문체 없음", brochure.join(", ") || undefined);
+
+  // 일반론 도입 부재(헤딩 제외 앞 200자)
+  const opener = body.replace(/^#{1,6}.*$/gm, "").replace(/<!--[\s\S]*?-->/g, "").trim().slice(0, 200);
+  const generic =
+    /(요즘\s*같은|바쁜\s*현대인|대세인?\s*요즘|고를\s*때\s*(중요|가장)|선택\s*시\s*고려|은\/?는\s*정말\s*중요|알아보(겠|려|겠습니다))/.test(
+      opener
+    );
+  push("no_generic_open", !generic, "일반론 도입 없음");
+
+  // 이모지 헤더 부재(C3 · 전 레벨 P0)
+  const headerEmoji = /^#{1,6}[^\n]*\p{Extended_Pictographic}/mu.test(body);
+  push("no_emoji_header", !headerEmoji, "이모지 헤더 없음");
+
+  const failed = checks.filter((c) => !c.ok).map((c) => c.label);
+  return { checks, failed };
+}
+
+/** §7 사람다움 루브릭 LLM 채점 프롬프트(10점). score < 7 → 재작성. */
+export function reviewRubricPrompt(opts: {
+  title: string;
+  bodyMd: string;
+  speaker: SpeakerPersona;
+}): string {
+  return [
+    `# 작업: 아래 블로그 후기 글을 '사람다움 루브릭'으로 냉정하게 채점하라(총 10점).`,
+    `채점 항목(배점):`,
+    `- 화자 실존감(2): 도입만 읽어도 누가·왜 쓰는지 안다`,
+    `- 개인 맥락 디테일(1): 자기 폭로성 디테일 1개 이상`,
+    `- 구체 증거(2): 고유명사·수치 증거 3종 이상 (\`[슬롯: …]\` 플레이스홀더도 증거 자리로 인정)`,
+    `- 사진 슬롯(1): 3개 이상 적재적소`,
+    `- 감정 흐름(2): 도입-중반-후반 곡선 + 솔직한 흠 1개`,
+    `- 문체(1): 이모지·구어 자연스러움(어색·과잉 없음)`,
+    `- 기계 티 부재(1): 일반론 도입·브로슈어 문체·상투구 0`,
+    opts.speaker.type
+      ? `참고(의도된 화자): ${opts.speaker.type}${opts.speaker.context ? ` — ${opts.speaker.context}` : ""}`
+      : null,
+    ``,
+    `## 제목`,
+    opts.title,
+    ``,
+    `## 본문(Markdown)`,
+    "```",
+    opts.bodyMd,
+    "```",
+    ``,
+    `아래 JSON만 출력하세요(코드블록 표시 없이):`,
+    `{"score": 0~10 정수, "issues": ["7점 미만이면 부족한 항목을 구체적으로", "…"]}`,
+  ]
+    .filter((x) => x !== null)
+    .join("\n");
+}
+
+/** §4/§7 미달 시 재작성 프롬프트 — 지적된 항목을 해소하며 사람 후기로 다시 쓴다. */
+export function reviewRewritePrompt(opts: {
+  title: string;
+  bodyMd: string;
+  persona: PersonaInput;
+  failedChecks: string[];
+  rubricIssues: string[];
+  primaryKeyword?: string;
+  minChars?: number;
+}): string {
+  return [
+    `# 작업: 아래 블로그 후기가 '사람다움' 기준에 미달했다. 지적된 부분을 고쳐 진짜 사람이 쓴 후기처럼 다시 써라.`,
+    `이건 '자연스럽게 고쳐쓰기'다. 사실·정보·이미지 마커는 유지하되, 아래 미달 항목을 반드시 해소하라.`,
+    ``,
+    opts.failedChecks.length
+      ? `## 필수요소 미충족 (반드시 해소)\n${opts.failedChecks.map((f) => `- ${f}`).join("\n")}`
+      : null,
+    opts.rubricIssues.length
+      ? `## 루브릭 지적사항 (반영)\n${opts.rubricIssues.map((f) => `- ${f}`).join("\n")}`
+      : null,
+    ``,
+    reviewSpecBlock(opts.persona),
+    ``,
+    `## 절대 지킬 것`,
+    `- 없는 사실·수치 지어내기 금지. 확인 안 된 수치는 \`[슬롯: 항목]\`으로 비워라(삭제하지 말고 자리는 남긴다).`,
+    `- 이미지 마커 \`<!-- IMG:slot=N -->\` 는 개수·위치 그대로 보존한다.`,
+    opts.persona.absentFacilities?.length
+      ? `- 없는 시설 언급 금지(띄어쓰기 우회도): ${opts.persona.absentFacilities.join(", ")}`
+      : null,
+    opts.minChars ? `- 공백 제외 ${opts.minChars}자 이상 유지(분량 축소 금지).` : null,
+    opts.primaryKeyword ? `- 메인 키워드 "${opts.primaryKeyword}" 2~3회 유지.` : null,
+    ``,
+    `**제목**: ${opts.title}`,
+    `**현재 본문**:`,
+    "```markdown",
+    opts.bodyMd,
+    "```",
+    ``,
+    `다시 쓴 Markdown 본문만 출력. 해설·코드펜스 표시 없이.`,
+  ]
+    .filter((x) => x !== null)
+    .join("\n");
+}
 
 export function personaPreamble(p: PersonaInput) {
   const povLabel =
@@ -93,6 +463,7 @@ export function personaPreamble(p: PersonaInput) {
           .join("\n\n")}`
       : null,
     p.notes ? `**기타 컨텍스트**: ${p.notes}` : null,
+    emojiIntensityBlock(p),
   ]
     .filter(Boolean)
     .join("\n");
@@ -573,9 +944,16 @@ export function outlinePrompt(opts: {
   const fixedImages = typeof opts.imageSlotCount === "number";
   const hasLabels = fixedImages && !!opts.imageLabels?.some((l) => l && l.trim());
   const lt = opts.lengthTarget && opts.lengthTarget > 0 ? opts.lengthTarget : null;
+  const isReview = resolveWritingTemplate(opts.persona) === "review_v1";
   return [
     `# 작업: 아래 주제로 글 구조(아웃라인) 만들기`,
     ``,
+    isReview
+      ? `⚠️ 이 글은 '고객 후기(review_v1)' 구조로 씁니다. 섹션을 다음 순서·기능으로 잡으세요(소제목 문구는 톤에 맞게 변주): ${REVIEW_V1.sections
+          .map((s, i) => `${i + 1})${s.split(" — ")[0]}`)
+          .join(" ")}. imagePlan 슬롯은 최소 ${REVIEW_V1.photoSlotsMin}개(시설 전경·기구/가격·청결 등)로 두고, hookParagraph는 화자 자기소개+개인 계기로 시작하세요(일반론 도입 금지).`
+      : null,
+    isReview ? `` : null,
     hasBrief
       ? `⚠️ 이 글은 사용자가 주제와 내용을 **직접 지정**했습니다. 아래 "사용자 지정 내용"을 반드시 충실히 반영하세요. 다만 글의 말투·톤·금지어·CTA 등 페르소나 규칙은 그대로 지킵니다(주제만 사용자 지정, 스타일은 페르소나).${
           lt ? ` **단, 글 길이는 사용자가 명시한 약 ${lt}자를 페르소나 기본 분량보다 우선합니다.**` : " 길이도 페르소나 규칙을 따릅니다."
@@ -642,6 +1020,7 @@ export function bodyPrompt(opts: {
   const hasBrief = !!opts.userBrief?.trim();
   const lt = opts.lengthTarget && opts.lengthTarget > 0 ? opts.lengthTarget : null;
   const bigTarget = lt && lt > (opts.persona.preferredLengthMax || 0) * 1.3;
+  const isReview = resolveWritingTemplate(opts.persona) === "review_v1";
   const hasLabels = !!opts.imageLabels?.some((l) => l && l.trim());
   const imageLabelBlock = hasLabels
     ? `\n**사진 배치 (반드시 준수)**: 각 이미지 슬롯은 아래 사진 내용을 담고 있습니다. \`<!-- IMG:slot=N -->\` 마커를 **그 사진 내용과 같은 주제를 다루는 문단 바로 뒤**에 넣으세요. 사진 내용과 다른 문단에 넣으면 안 됩니다(예: 러닝머신 사진을 프리웨이트존 문단에 넣지 말 것).\n${(opts.imageLabels ?? []).map((l, i) => `  - slot ${i}: ${l && l.trim() ? l.trim() : "(설명 없음 — 순서상 위치)"}`).join("\n")}`
@@ -659,6 +1038,8 @@ export function bodyPrompt(opts: {
     hasBrief ? opts.userBrief!.trim() : null,
     hasBrief ? "```" : null,
     hasBrief ? `` : null,
+    isReview ? reviewSpecBlock(opts.persona) : null,
+    isReview ? `` : null,
     `반드시 지킬 규칙:`,
     `0. **거짓·날조 금지 (최우선).** 확인되지 않은 사실을 지어내지 마라 — 실제 운영 여부를 모르는 서비스·클래스·프로그램·부대시설·이벤트·할인·가격·수치·수상·연혁·후기를 있는 것처럼 쓰면 절대 안 된다(예: 없는 "명상 클래스"를 운영한다고 서술 금지). 확정 사실로 쓸 수 있는 건 페르소나 설정·사용자 입력·주어진 주제 정보뿐이다. 애매하면 쓰지 말고, 분위기·감각·독자 관점·일반적 정황으로 자연스럽게 풀어라.`,
     opts.persona.absentFacilities?.length
@@ -872,6 +1253,8 @@ export function humanizePrompt(opts: {
   primaryKeyword?: string;
   /** 분량 늘리기 반려 직후 호출 시, 이 글자수(공백 제외) 미만으로 줄이지 못하게 한다. */
   minChars?: number;
+  /** 실효 이모지 레벨(0~3). 있으면 전역 가이드의 '이모지 떡칠 금지'를 레벨 인지 규칙으로 덮어쓴다(§5). */
+  emojiLevel?: EmojiIntensity;
 }) {
   return [
     `# 작업: 아래 블로그 초안에서 'AI가 쓴 티'를 전부 걷어내고, 진짜 사람이 직접 쓴 것처럼 다시 써라.`,
@@ -880,6 +1263,8 @@ export function humanizePrompt(opts: {
     `## 반드시 제거할 AI 티 패턴 (하나도 남기지 마라)`,
     opts.rules.trim(),
     ``,
+    typeof opts.emojiLevel === "number" ? emojiAntiAiBlock(opts.emojiLevel) : null,
+    typeof opts.emojiLevel === "number" ? `` : null,
     opts.brandName || opts.primaryKeyword
       ? `## 상호 / 키워드 교정 (중요)`
       : null,
