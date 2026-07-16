@@ -275,6 +275,13 @@ export async function generateManualDraftActionState(
     .filter(Boolean);
   const photoMode = String(formData.get("photoMode") ?? "auto") === "manual" ? "manual" : "auto";
 
+  // 화자 지정(선택) — 있으면 페르소나 기본 화자를 덮어쓴다. ""·미지정 = 페르소나 기본(하위호환).
+  const speakerRaw = String(formData.get("speaker") ?? "").trim();
+  const speaker =
+    speakerRaw === "owner" || speakerRaw === "first_person" || speakerRaw === "expert" || speakerRaw === "third_person"
+      ? speakerRaw
+      : undefined;
+
   // 직접 첨부 사진 읽기 (사진별 설명 라벨을 같은 순서로 매칭 — 본문 배치용)
   const photoLabels = formData.getAll("photoLabel").map((l) => String(l).trim());
   const uploadedImages: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string; label?: string }> = [];
@@ -304,6 +311,7 @@ export async function generateManualDraftActionState(
       photoMode,
       uploadedImages,
       augment,
+      speaker,
     });
     if ("needsInfo" in res) {
       return { needsInfo: true, request: res.request, supplements: res.supplements };

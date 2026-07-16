@@ -32,6 +32,18 @@ export function ManualDraftForm({
   const [title, setTitle] = useState("");
   const [brief, setBrief] = useState("");
   const [keywords, setKeywords] = useState("");
+  // "" = 페르소나 기본 화자 유지(하위호환). 지정 시 페르소나 화자를 덮어쓴다.
+  const [speaker, setSpeaker] = useState("");
+
+  // 라벨은 각 옵션이 '실제로 누가 말하는지' 드러나게(오해 방지).
+  const SPEAKER_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
+    { value: "", label: "페르소나 기본값 유지", hint: "블로그 페르소나에 설정된 화자를 그대로 사용" },
+    { value: "owner", label: "운영자·직원 (업체 측)", hint: "우리 시설을 소개·안내하는 톤 — “저희 ○○에서는~”, “직접 갖춰 두었어요”" },
+    { value: "first_person", label: "고객 후기 (1인칭·방문자)", hint: "직접 다녀온 손님 경험담 — “제가 가보니~”, “다녀왔어요”" },
+    { value: "expert", label: "전문가 해설", hint: "근거·정보 중심으로 차분하게 설명" },
+    { value: "third_person", label: "3인칭 관찰자", hint: "담담하게 소개·관찰" },
+  ];
+  const speakerHint = SPEAKER_OPTIONS.find((o) => o.value === speaker)?.hint ?? "";
 
   return (
     <form action={action} className="space-y-6">
@@ -70,7 +82,7 @@ export function ManualDraftForm({
           }
         />
         <p className="text-xs text-ink-400">
-          여기 적은 내용을 충실히 반영합니다. 말투·길이·금지어 등은 블로그 페르소나 설정을 그대로 따릅니다.
+          여기 적은 내용을 충실히 반영합니다. 말투·길이·금지어 등은 블로그 페르소나 설정을 그대로 따릅니다. (화자는 아래에서 이 글에 한해 바꿀 수 있어요.)
         </p>
       </div>
 
@@ -84,6 +96,30 @@ export function ManualDraftForm({
           onChange={(e) => setKeywords(e.target.value)}
           placeholder="예: 신메뉴, 직화 불고기 덮밥, 6월 이벤트"
         />
+      </div>
+
+      {/* 화자(누가 쓰는 글인지) */}
+      <div className="space-y-1.5">
+        <Label htmlFor="speaker">화자 (누구 입장에서 쓰는 글인가요?)</Label>
+        <select
+          id="speaker"
+          name="speaker"
+          value={speaker}
+          onChange={(e) => setSpeaker(e.target.value)}
+          className="flex h-10 w-full rounded-lg border border-paper-300 bg-paper-50 px-3 text-sm text-ink-700 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/30"
+        >
+          {SPEAKER_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-ink-400">
+          {speaker === ""
+            ? "지정하면 이 글에 한해 페르소나 기본 화자를 덮어씁니다. "
+            : ""}
+          {speakerHint}
+        </p>
       </div>
 
       {/* 사진 처리 방식 */}

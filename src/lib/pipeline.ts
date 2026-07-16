@@ -35,6 +35,8 @@ import {
   reviewRubricPrompt,
   reviewRewritePrompt,
   deriveSpeakerPersona,
+  applyBriefSpeaker,
+  type BriefSpeaker,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
@@ -991,6 +993,8 @@ export async function generateDraftFromBrief(opts: {
   /** 백그라운드 생성 — 이 초안 행(status="draft")을 채워 넣는다(INSERT 대신 UPDATE).
    *  지정되면 되묻기를 던지지 않고 있는 정보로 최선 생성 + 한계 고지한다. */
   existingDraftId?: string;
+  /** 초안 요청이 지정한 화자(운영자/고객후기/전문가/3인칭). 있으면 페르소나 기본 화자를 덮어쓴다. */
+  speaker?: BriefSpeaker | null;
 }) {
   const blog = await db.query.blogs.findFirst({
     where: eq(schema.blogs.id, opts.blogId),
@@ -1000,7 +1004,9 @@ export async function generateDraftFromBrief(opts: {
   const activePersona =
     blog.personas.find((p) => p.isActive) ?? blog.personas[0];
   if (!activePersona) throw new Error("PERSONA_MISSING");
-  const persona = personaFromRow(blog, activePersona);
+  // 초안 요청이 화자를 지정하면 페르소나 기본 화자를 덮어쓴다(미지정=하위호환).
+  // 프리앰블·아웃라인·본문·review 게이트가 모두 이 실효 페르소나를 따른다.
+  const persona = applyBriefSpeaker(personaFromRow(blog, activePersona), opts.speaker);
   const basePreamble = await buildSystemPreamble(persona);
 
   const title = opts.title.trim();
@@ -1410,6 +1416,8 @@ export async function startBriefGeneration(opts: {
   photoMode: "manual" | "auto";
   uploadedImages?: Array<{ buffer: Buffer; mimeType: string; size: number; ext: string; label?: string }>;
   augment?: AugmentArg;
+  /** 초안 요청이 지정한 화자. 있으면 페르소나 기본 화자를 덮어쓴다(미지정=하위호환). */
+  speaker?: BriefSpeaker | null;
 }): Promise<StartGenerationResult> {
   const blog = await db.query.blogs.findFirst({
     where: eq(schema.blogs.id, opts.blogId),
@@ -1418,7 +1426,7 @@ export async function startBriefGeneration(opts: {
   if (!blog) throw new Error("BLOG_NOT_FOUND");
   const activePersona = blog.personas.find((p) => p.isActive) ?? blog.personas[0];
   if (!activePersona) throw new Error("PERSONA_MISSING");
-  const persona = personaFromRow(blog, activePersona);
+  const persona = applyBriefSpeaker(personaFromRow(blog, activePersona), opts.speaker);
   const title = opts.title.trim();
   const brief = opts.brief.trim();
   const lengthTarget = parseExplicitLength(`${title}\n${brief}`);
