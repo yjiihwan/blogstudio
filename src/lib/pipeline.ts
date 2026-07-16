@@ -37,6 +37,9 @@ import {
   deriveSpeakerPersona,
   applyBriefSpeaker,
   type BriefSpeaker,
+  topicNeedsDomainMaterial,
+  domainMaterialPrompt,
+  filterDomainMaterial,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
@@ -390,6 +393,8 @@ async function expandBodyToTarget(opts: {
   maxTokens?: number;
   /** 페르소나 '없는 시설/금지 소재' — 분량 확보 시 지어내지 못하게 명시 열거한다. */
   forbiddenTerms?: string[];
+  /** 일반 상식 소재 — 패딩 대신 실재료로 확장하도록 참고 제공. */
+  domainMaterial?: string[];
 }): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
   const noWs = (s: string) => s.replace(/\s+/g, "").length;
   let rawBody = opts.rawBody;
@@ -419,6 +424,11 @@ async function expandBodyToTarget(opts: {
             opts.forbiddenTerms?.length
               ? `- **다음은 이 업체에 없으므로 절대 언급 금지(띄어쓰기·표현 우회도 금지): ${opts.forbiddenTerms.join(", ")}.** 분량이 부족해도 이것들로 채우지 마세요.`
               : null,
+            opts.domainMaterial?.length
+              ? `- 아래 "일반 상식 소재"를 구체적으로 활용해 채우세요(막연한 분위기 문장 금지). 단 이 업체가 제공하는 프로그램으로 단정하진 마세요:\n${opts.domainMaterial
+                  .map((s) => `    · ${s}`)
+                  .join("\n")}`
+              : null,
             `- 제목(#)·인사말·마무리 CTA·이미지 마커(<!-- IMG -->)는 넣지 마세요. 오직 새 ## 섹션 본문만 출력.`,
             ``,
             `**기존 본문 (참고용 — 다시 출력하지 마세요)**:`,
@@ -446,6 +456,55 @@ async function expandBodyToTarget(opts: {
     cur = noWs(rawBody);
   }
   return { bodyMd: rawBody, inTokens, outTokens, costCents };
+}
+
+/**
+ * 일반 상식 소재 채널 — how-to/콘텐츠성 주제일 때 '검증된 일반 지식'을 재료로 모은다.
+ * WHY: 업체 고유 사실(시설)은 있어도 '주제를 채울 일반 상식'(운동 종목·순서 등)이 없으면
+ * 생성이 구체 정보 대신 분위기 문장으로 분량만 채운다(빈 껍데기). LLM 자체 일반 지식을
+ * 소스로 뽑아 헛소리·업체주장 오염을 filterDomainMaterial 로 걸러 순수 일반 지식만 남긴다.
+ * 발동 조건 미충족이면 빈 배열(비용·오남용 절제). mock/가이드 비활성이면 스킵.
+ */
+async function collectDomainMaterial(opts: {
+  title: string;
+  primaryKeyword: string;
+  niche?: string;
+  angleOrBrief?: string | null;
+  absentFacilities: string[];
+  preamble: string;
+  callerUserId?: string;
+  model: string;
+}): Promise<{ material: string[]; inTokens: number; outTokens: number; costCents: number }> {
+  const zero = { material: [] as string[], inTokens: 0, outTokens: 0, costCents: 0 };
+  if (opts.model === "mock") return zero;
+  const probe = `${opts.title}\n${opts.primaryKeyword}\n${opts.angleOrBrief ?? ""}`;
+  if (!topicNeedsDomainMaterial(probe)) return zero;
+  try {
+    const res = await llm({
+      system: opts.preamble,
+      callerUserId: opts.callerUserId,
+      maxTokens: 900,
+      reasoningEffort: "low", // 구조적 소재 수집 — 프로즈 아님, 속도↑
+      messages: [
+        {
+          role: "user",
+          content: domainMaterialPrompt({
+            title: opts.title,
+            primaryKeyword: opts.primaryKeyword,
+            niche: opts.niche,
+            angleOrBrief: opts.angleOrBrief,
+            absentFacilities: opts.absentFacilities,
+          }),
+        },
+      ],
+    });
+    const parsed = safeJson<{ material?: string[] }>(res.text);
+    const raw = Array.isArray(parsed?.material) ? parsed!.material!.filter((s) => typeof s === "string") : [];
+    const material = filterDomainMaterial(raw, opts.absentFacilities);
+    return { material, inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
+  } catch {
+    return zero;
+  }
 }
 
 /**
@@ -739,6 +798,19 @@ export async function generateDraftForBlog(
     imagePlan: [],
   };
 
+  /* --- Step 2.5: 일반 상식 소재 수집(how-to/콘텐츠성 주제일 때) --- */
+  const dm = await collectDomainMaterial({
+    title: topicRow!.title,
+    primaryKeyword: topicRow!.primaryKeyword,
+    niche: persona.niche ?? undefined,
+    angleOrBrief: topicRow!.angle,
+    absentFacilities: persona.absentFacilities,
+    preamble,
+    callerUserId,
+    model: "auto",
+  });
+  const domainMaterial = dm.material;
+
   /* --- Step 3: body --- */
   const bodyRes = await llm({
     system: preamble,
@@ -758,6 +830,7 @@ export async function generateDraftForBlog(
           },
           outline,
           lengthTarget: lengthTarget ?? undefined,
+          domainMaterial,
         }),
       },
     ],
@@ -777,6 +850,7 @@ export async function generateDraftForBlog(
       callerUserId,
       maxTokens: bodyMaxTokens,
       forbiddenTerms: persona.absentFacilities,
+      domainMaterial,
     });
     rawBody = exp.bodyMd;
     bodyInTokens += exp.inTokens;
@@ -808,6 +882,7 @@ export async function generateDraftForBlog(
     primaryKeyword: topicRow!.primaryKeyword,
     secondaryKeywords: JSON.parse(topicRow!.secondaryKeywordsJson || "[]"),
     supplements,
+    domainMaterial,
   });
   const guard = await factGuardBody({
     bodyMd: hum.bodyMd,
@@ -852,11 +927,11 @@ export async function generateDraftForBlog(
   });
 
   const totalInTokens =
-    topicInTokens + outlineRes.inputTokens + bodyInTokens + hum.inTokens + guard.inTokens + review.inTokens;
+    topicInTokens + outlineRes.inputTokens + dm.inTokens + bodyInTokens + hum.inTokens + guard.inTokens + review.inTokens;
   const totalOutTokens =
-    topicOutTokens + outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens + review.outTokens;
+    topicOutTokens + outlineRes.outputTokens + dm.outTokens + bodyOutTokens + hum.outTokens + guard.outTokens + review.outTokens;
   const totalCostCents =
-    topicCostCents + outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
+    topicCostCents + outlineRes.costCents + dm.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
 
   /* 발행 전 게이트(업종 무관): 사실검증 후에도 근거 없는 구체 주장(가격·수치·연혁·수상·규모·없는시설)이
      남았는지 결정론 검사해 플래그한다. 검수자가 카드에서 바로 인지하도록 seoIssues에 얹는다(비차단). */
@@ -1092,6 +1167,19 @@ export async function generateDraftFromBrief(opts: {
     }>;
   }>(outlineRes.text) ?? { hookParagraph: "", sections: [], imagePlan: [] };
 
+  /* --- Step 2.5: 일반 상식 소재 수집(how-to/콘텐츠성 주제일 때) --- */
+  const dm = await collectDomainMaterial({
+    title,
+    primaryKeyword,
+    niche: persona.niche ?? undefined,
+    angleOrBrief: brief || topicRow.angle,
+    absentFacilities: persona.absentFacilities,
+    preamble,
+    callerUserId: opts.callerUserId,
+    model: "auto",
+  });
+  const domainMaterial = dm.material;
+
   /* --- Step 3: body --- */
   const bodyRes = await llm({
     system: preamble,
@@ -1107,6 +1195,7 @@ export async function generateDraftFromBrief(opts: {
           userBrief: brief,
           imageLabels,
           lengthTarget: lengthTarget ?? undefined,
+          domainMaterial,
         }),
       },
     ],
@@ -1125,6 +1214,7 @@ export async function generateDraftFromBrief(opts: {
       callerUserId: opts.callerUserId,
       maxTokens: bodyMaxTokens,
       forbiddenTerms: persona.absentFacilities,
+      domainMaterial,
     });
     rawBody = exp.bodyMd;
     bodyInTokens += exp.inTokens;
@@ -1157,6 +1247,7 @@ export async function generateDraftFromBrief(opts: {
     secondaryKeywords,
     userBrief: brief,
     supplements,
+    domainMaterial,
   });
   const guard = await factGuardBody({
     bodyMd: hum.bodyMd,
@@ -1219,9 +1310,9 @@ export async function generateDraftFromBrief(opts: {
     limitationFlag = limitationFlag ?? limitationNotice(["material"]);
   }
 
-  const totalInTokens = outlineRes.inputTokens + bodyInTokens + hum.inTokens + guard.inTokens + review.inTokens;
-  const totalOutTokens = outlineRes.outputTokens + bodyOutTokens + hum.outTokens + guard.outTokens + review.outTokens;
-  const totalCostCents = outlineRes.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
+  const totalInTokens = outlineRes.inputTokens + dm.inTokens + bodyInTokens + hum.inTokens + guard.inTokens + review.inTokens;
+  const totalOutTokens = outlineRes.outputTokens + dm.outTokens + bodyOutTokens + hum.outTokens + guard.outTokens + review.outTokens;
+  const totalCostCents = outlineRes.costCents + dm.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
 
   /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
   const draftValues = {
