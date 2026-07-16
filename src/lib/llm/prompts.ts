@@ -226,6 +226,37 @@ export function deriveSpeakerPersona(p: PersonaInput): SpeakerPersona {
   return { type, context };
 }
 
+/**
+ * 초안 요청(brief)이 지정한 화자. 페르소나 기본 화자를 덮어쓴다. undefined/null = 미지정(하위호환).
+ * pointOfView 값과 1:1 대응한다.
+ */
+export type BriefSpeaker = PersonaInput["pointOfView"];
+
+/** UI·검증에서 공유하는 화자 선택지(라벨은 실제 화자가 드러나게). */
+export const BRIEF_SPEAKER_OPTIONS: Array<{ value: BriefSpeaker; label: string; hint: string }> = [
+  { value: "owner", label: "운영자·직원 (업체 측)", hint: "우리 시설을 소개·안내하는 톤 — “저희 ○○에서는~”, “직접 갖춰 두었어요”" },
+  { value: "first_person", label: "고객 후기 (1인칭·방문자)", hint: "직접 다녀온 손님 경험담 — “제가 가보니~”, “다녀왔어요”" },
+  { value: "expert", label: "전문가 해설", hint: "근거·정보 중심으로 차분하게 설명" },
+  { value: "third_person", label: "3인칭 관찰자", hint: "담담하게 소개·관찰" },
+];
+
+/**
+ * 초안 brief 화자 지정을 페르소나에 얹어 '실효 페르소나'를 만든다.
+ * WHY: 초안 생성 경로엔 화자 override 통로가 없어 페르소나 POV대로만 나갔다(반려 경로엔 이미 있음).
+ * 지정 시 pointOfView·speakerPersona를 덮어써 deriveSpeakerPersona/resolveWritingTemplate/preamble이
+ * 모두 지정 화자를 따르게 한다. 고객 후기(first_person)만 review 템플릿을 허용하고, 그 외 화자는
+ * standard로 고정해 '고객 후기' 자가검증 게이트가 오작동하지 않게 한다. 미지정이면 원본 그대로(하위호환).
+ */
+export function applyBriefSpeaker(persona: PersonaInput, speaker?: BriefSpeaker | null): PersonaInput {
+  if (!speaker) return persona;
+  return {
+    ...persona,
+    pointOfView: speaker,
+    speakerPersona: null, // brief 지정이 페르소나 명시 화자보다 우선
+    writingTemplate: speaker === "first_person" ? (persona.writingTemplate ?? null) : "standard",
+  };
+}
+
 /** 브로슈어·과시 문체 결정론 검출(§5 anti-ai 신규). '자랑합니다/완비/자부' 류. */
 const BROCHURE_PATTERNS: RegExp[] = [
   /자랑합니다/,
