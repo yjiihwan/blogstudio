@@ -579,6 +579,8 @@ export function buildGroundingText(
     userBrief?: string;
     /** 보강 루프에서 사용자가 라운드마다 추가로 제출한 확정 정보(누적). 근거로 취급한다. */
     supplements?: string[];
+    /** 일반 상식 소재(검증된 일반 지식) — factGuard 가 종목·순서 등을 지우지 않도록 근거로 인정. */
+    domainMaterial?: string[];
   }
 ): string {
   const parts: string[] = [];
@@ -602,6 +604,10 @@ export function buildGroundingText(
   // 누적 보강 정보도 확정 근거에 포함 — factGuard 가 이 값을 근거로 인정해 정상 확장을 허용한다.
   for (const s of extra?.supplements ?? []) {
     if (s && s.trim()) push("사용자 추가 제공 정보(보강)", s.trim());
+  }
+  // 일반 상식 소재도 근거로 인정 — 업체 고유 사실이 아니라 일반 지식임을 라벨로 구분.
+  for (const s of extra?.domainMaterial ?? []) {
+    if (s && s.trim()) push("일반 상식 소재(검증된 일반 지식, 업체 고유 사실 아님)", s.trim());
   }
   return parts.join("\n");
 }
@@ -953,6 +959,92 @@ export function augmentedPreamble(preamble: string, supplements: string[]): stri
   return `${preamble}\n\n${block}`;
 }
 
+/* ============================================================
+   일반 상식 소재 채널 (domain material)
+   목적: 주제가 how-to/콘텐츠성(운동 루틴·팁·방법 등)일 때, 업체 고유 사실이 아니라
+   '누구에게나 통용되는 일반 상식'을 별도 재료로 공급한다. 이게 없으면 생성 단계가
+   구체 정보를 못 넣고 분위기 문장으로 분량만 채운다(빈 껍데기). 순수 함수(프롬프트 조립)만.
+   신뢰 소스 = LLM 자체 일반 지식. 헛소리·업체주장 오염은 filterDomainMaterial 로 사후 차단.
+   ============================================================ */
+
+/** 주제가 '내용을 채울 일반 상식'이 필요한 how-to/콘텐츠성인지 판정(발동 조건). */
+export function topicNeedsDomainMaterial(text: string): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  // 루틴·방법·팁·자세·운동/식단 지식 등 '주제 자체가 지식 전달'인 신호.
+  return /(루틴|방법|하는\s*법|how\s*to|팁|가이드|초보|입문|순서|자세|폼|스트레칭|운동법|종목|프로그램\s*구성|식단|영양|다이어트|감량|칼로리|부위|가슴|등|어깨|하체|상체|복부|코어|유산소|근력|체지방|주의(사항|점)|효과|추천\s*(운동|종목|메뉴))/.test(
+    t
+  );
+}
+
+/**
+ * 일반 상식 소재 수집 프롬프트 — 주제로 '널리 통용되는 일반 지식' 5~10개를 뽑는다.
+ * 엄격: 업체 고유 사실(가격·기구 브랜드·회원수·이벤트) 금지, 특정 수치 단정 금지,
+ * absentFacilities(업체가 제공 안 하는 것으로 읽힐 소재) 제외, 주제 무관 소재 금지.
+ */
+export function domainMaterialPrompt(opts: {
+  title: string;
+  primaryKeyword: string;
+  niche?: string;
+  angleOrBrief?: string | null;
+  absentFacilities?: string[];
+}): string {
+  return [
+    `# 작업: 아래 주제로 블로그 본문에 쓸 '일반 상식 소재'를 모아라.`,
+    ``,
+    `너는 특정 업체를 대변하는 게 아니라, 이 주제에 대해 **누구에게나 통용되는 일반 상식**을 정리하는 역할이다.`,
+    `목적: 글쓴이가 이 소재를 참고해 독자에게 실질적으로 도움되는 **구체적 내용**을 쓰게 한다`,
+    `(예: "상체 루틴"이면 실제 대표 종목·합리적 순서·일반적 주의점 같은 것).`,
+    ``,
+    `**주제**: ${opts.title}`,
+    `**메인 키워드**: ${opts.primaryKeyword}`,
+    opts.niche ? `**분야**: ${opts.niche}` : null,
+    opts.angleOrBrief?.trim() ? `**앵글/요청**: ${opts.angleOrBrief.trim()}` : null,
+    ``,
+    `엄격한 규칙:`,
+    `1. **일반 상식만.** 이 분야에서 널리 인정되는 사실·통념·기본 지식만 담아라.`,
+    `2. **특정 업체 고유 사실 금지.** 특정 헬스장의 가격·기구 브랜드·회원수·이벤트·수상·연혁 같은 업체 주장은 절대 넣지 마라(그건 다른 단계에서 다룬다).`,
+    `3. **없는 수치 지어내기 금지.** 정확한 칼로리·세트/횟수·소요시간을 단정하지 말고, 필요하면 "가볍게/여러 세트로 나눠" 같은 일반적·정성적 표현으로.`,
+    opts.absentFacilities?.length
+      ? `4. **다음 개념은 넣지 마라(이 업체가 제공하는 서비스처럼 읽힐 수 있음): ${opts.absentFacilities.join(", ")}.** 단, 개인이 스스로 하는 일반 운동 지식(종목·순서·주의점 등)은 괜찮다.`
+      : `4. '특정 업체가 제공하는 서비스/프로그램'처럼 읽힐 표현은 피하고, 개인이 알아두면 좋은 일반 지식으로만.`,
+    `5. **주제와 직접 관련된 것만.** 주제에서 벗어난 일반론·잡다한 팁 금지.`,
+    ``,
+    `아래 JSON만 출력하세요(코드블록 표시 없이):`,
+    `{"material": ["구체적이고 검증 가능한 일반 상식 한 줄", "..."]}`,
+    `5~10개. 각 항목은 한 문장, 구체적으로(막연한 "꾸준히 하세요" 류 금지).`,
+  ]
+    .filter((x) => x !== null)
+    .join("\n");
+}
+
+/**
+ * 수집한 일반 상식 소재에서 헛소리·업체 고유 주장 오염을 걷어낸다(가드).
+ * - 업체 고유 주장 패턴(가격·실적%·연혁·수상·규모·평점)이 섞인 항목 드롭(빈 근거로 findFabricationHits).
+ * - absentFacilities(닫힌세계) 위반 항목 드롭.
+ * - 너무 짧거나 빈 항목 드롭. 통과한 순수 일반 지식만 반환.
+ */
+export function filterDomainMaterial(
+  material: string[],
+  absentFacilities: string[] = []
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of material ?? []) {
+    const s = (raw || "").trim();
+    if (s.replace(/\s+/g, "").length < 6) continue;
+    const key = s.toLowerCase().replace(/\s+/g, "");
+    if (seen.has(key)) continue;
+    // 업체 고유 주장(수치·실적·연혁·수상·규모·평점)이 섞였으면 일반 상식이 아님 → 드롭.
+    if (findFabricationHits(s, "", []).length > 0) continue;
+    // 닫힌세계 금지 소재 언급 시 드롭.
+    if (findForbiddenTopicHits(s, absentFacilities).length > 0) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out.slice(0, 10);
+}
+
 /** Step 2: outline a chosen topic. */
 export function outlinePrompt(opts: {
   persona: PersonaInput;
@@ -1047,11 +1139,21 @@ export function bodyPrompt(opts: {
   imageLabels?: string[];
   /** 사용자가 명시한 목표 글자수(공백 제외). 있으면 페르소나 기본 분량보다 우선한다. */
   lengthTarget?: number;
+  /** 일반 상식 소재(검증된 일반 지식) — how-to/콘텐츠성 주제에서 구체 내용을 채우는 재료. */
+  domainMaterial?: string[];
 }) {
   const hasBrief = !!opts.userBrief?.trim();
   const lt = opts.lengthTarget && opts.lengthTarget > 0 ? opts.lengthTarget : null;
   const bigTarget = lt && lt > (opts.persona.preferredLengthMax || 0) * 1.3;
   const isReview = resolveWritingTemplate(opts.persona) === "review_v1";
+  const domain = (opts.domainMaterial ?? []).filter((s) => s && s.trim());
+  const domainBlock = domain.length
+    ? `\n## 참고 일반 상식 소재 (검증된 일반 지식 — 본문에 **구체적으로 활용**하되, 이 업체 고유 사실로 단정하지 마라)\n${domain
+        .map((s, i) => `${i + 1}. ${s.trim()}`)
+        .join(
+          "\n"
+        )}\n※ 위 소재는 누구에게나 통용되는 일반 상식이다. 주제가 구체적 내용을 약속하면(예: "루틴 5개", "종목 정했다") **절대 "5개 정했다"처럼 개수만 말하고 넘어가지 마라 — 실제 종목명과 순서를 하나하나 구체적으로 적어라**(예: "가슴은 체스트프레스, 등은 랫풀다운, 어깨는 숄더프레스…" 식으로 실명 나열). 막연한 흐름 서술("등→어깨로 이어지는 흐름")만으로 때우면 미반영으로 간주. 단, 이 업체가 그 종목/프로그램을 '제공·지도한다'고 쓰지는 마라(개인이 스스로 참고하는 일반 지식으로 서술).`
+    : "";
   const hasLabels = !!opts.imageLabels?.some((l) => l && l.trim());
   const imageLabelBlock = hasLabels
     ? `\n**사진 배치 (반드시 준수)**: 각 이미지 슬롯은 아래 사진 내용을 담고 있습니다. \`<!-- IMG:slot=N -->\` 마커를 **그 사진 내용과 같은 주제를 다루는 문단 바로 뒤**에 넣으세요. 사진 내용과 다른 문단에 넣으면 안 됩니다(예: 러닝머신 사진을 프리웨이트존 문단에 넣지 말 것).\n${(opts.imageLabels ?? []).map((l, i) => `  - slot ${i}: ${l && l.trim() ? l.trim() : "(설명 없음 — 순서상 위치)"}`).join("\n")}`
@@ -1072,7 +1174,7 @@ export function bodyPrompt(opts: {
     isReview ? reviewSpecBlock(opts.persona) : null,
     isReview ? `` : null,
     `반드시 지킬 규칙:`,
-    `0. **거짓·날조 금지 (최우선).** 확인되지 않은 사실을 지어내지 마라 — 실제 운영 여부를 모르는 서비스·클래스·프로그램·부대시설·이벤트·할인·가격·수치·수상·연혁·후기를 있는 것처럼 쓰면 절대 안 된다(예: 없는 "명상 클래스"를 운영한다고 서술 금지). 확정 사실로 쓸 수 있는 건 페르소나 설정·사용자 입력·주어진 주제 정보뿐이다. 애매하면 쓰지 말고, 분위기·감각·독자 관점·일반적 정황으로 자연스럽게 풀어라.`,
+    `0. **거짓·날조 금지 (최우선) — 단, '업체 고유 사실'과 '일반 상식'을 구분하라.** ⛔ 이 업체 고유의 주장(실제 운영 여부를 모르는 서비스·클래스·프로그램·부대시설·이벤트·할인·가격·기구 브랜드·수치·수상·연혁·후기)을 있는 것처럼 쓰면 절대 안 된다(예: 없는 "명상 클래스"를 운영한다고 서술 금지). 이 업체 고유 사실로 쓸 수 있는 건 페르소나 설정·사용자 입력·주어진 주제 정보뿐이다. ✅ 반면 **주제 분야의 일반 상식**(예: 상체 운동이 대개 어떤 종목·순서로 구성되는지, 여름엔 가볍게 시작하는 게 좋다는 것)은 누구에게나 통용되는 참인 지식이므로 **구체적으로 활용해도 된다** — 아래 "참고 일반 상식 소재"가 있으면 적극 사용하라. 주제가 구체 내용(루틴·방법·종목 등)을 약속하면 **막연한 분위기 문장으로 얼버무리지 말고 실제 내용을 구체적으로 적어라.** 다만 그 일반 지식을 '이 업체가 제공하는 프로그램'으로 단정하진 마라. 정말 애매하면 업체 고유 사실로 단정하지 않는 쪽을 택하되, 일반 상식은 구체적으로 풀어라.`,
     opts.persona.absentFacilities?.length
       ? `0-1. **닫힌세계 규칙 (하드 제약).** 이 글은 위 "확정 사실/사용자 지정 내용"에 명시된 시설·프로그램·서비스만 언급할 수 있다. 그 목록에 없는 것은 존재하지 않는 것으로 간주하고 제목·소제목·본문 어디에도 쓰지 마라. 특히 다음은 **이 업체에 없으므로 언급·암시 절대 금지**(띄어쓰기·표현을 바꿔 우회하는 것도 금지): ${opts.persona.absentFacilities.join(", ")}. 분량이 부족해도 이것들을 지어내 채우지 말고, 확정 시설의 디테일·감각 묘사로 늘려라.`
       : null,
@@ -1107,6 +1209,7 @@ export function bodyPrompt(opts: {
     JSON.stringify(opts.outline, null, 2),
     "```",
     imageLabelBlock || null,
+    domainBlock || null,
     ``,
     `Markdown 본문만 출력하세요. 메타정보·해설·코드블록 표시 없이.`,
   ]
