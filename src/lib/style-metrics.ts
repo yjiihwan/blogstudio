@@ -424,8 +424,10 @@ export function styleMetricsDirective(agg: StyleMetricsAggregate | null): string
     );
   }
 
+  // 하한 2 — 붙여넣은 원문에 빈 줄이 없으면 «줄=문단»으로 잡혀 평균이 1대까지 내려간다.
+  // 그 수치를 그대로 지시하면 한 문장짜리 문단만 나열하는 퇴행적인 글이 된다.
   L.push(
-    `- 한 문단은 문장 ${Math.max(1, Math.round(agg.avgSentencesPerParagraph))}개 안팎에서 끊어라(참고 글 평균 ${agg.avgSentencesPerParagraph}문장). 문단을 길게 뭉치지 마라.`
+    `- 한 문단은 문장 ${Math.max(2, Math.round(agg.avgSentencesPerParagraph))}개 안팎에서 끊어라(참고 글 실측 평균 ${agg.avgSentencesPerParagraph}문장). 문단을 길게 뭉치지 마라.`
   );
 
   const introTop = agg.introDistribution.filter((d) => d.type !== "unknown")[0];
@@ -440,8 +442,10 @@ export function styleMetricsDirective(agg: StyleMetricsAggregate | null): string
       .slice(0, 5)
       .map((f) => `"${f.label}"`)
       .join(", ");
+    // 상한 10 — 짧은 샘플일수록 1000자당 빈도가 튀는데, 그대로 지시하면 군말 범벅이 된다.
+    const rate = Math.min(10, Math.max(1, Math.round(agg.fillerPer1000)));
     L.push(
-      `- ${words} 같은 구어체 군말을 1000자당 ${Math.max(1, Math.round(agg.fillerPer1000))}회 정도 자연스럽게 섞어라. 개수를 채우려고 억지로 넣지는 마라.`
+      `- ${words} 같은 구어체 군말을 1000자당 ${rate}회 정도 자연스럽게 섞어라(참고 글 실측 ${agg.fillerPer1000}회). 개수를 채우려고 억지로 넣지는 마라.`
     );
   }
 
