@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
 import { getAccessibleBlog, requireUser } from "@/lib/auth";
+import { normalizeCategory } from "@/lib/style-samples-core";
 
 function readPayload(formData: FormData) {
   return {
@@ -14,6 +15,8 @@ function readPayload(formData: FormData) {
       blogTitle: String(formData.get("blogTitle") ?? "").trim() || null,
       blogUrl: String(formData.get("blogUrl") ?? "").trim() || null,
       niche: String(formData.get("niche") ?? "").trim() || null,
+      // 문체 샘플 매칭용 업종 카테고리. 목록 밖 값은 null(=미지정)로 떨군다.
+      category: normalizeCategory(formData.get("category")),
       status: String(formData.get("status") ?? "active") as
         | "active"
         | "paused"

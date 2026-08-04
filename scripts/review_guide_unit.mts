@@ -9,9 +9,12 @@ import {
   detectBrochureTone,
   reviewChecklist,
   reviewSpecBlock,
+  personaPreamble,
+  countSlotPlaceholders,
   REVIEW_V1,
   type PersonaInput,
 } from "@/lib/llm/prompts";
+import { slotOverflowRejection, insertBeforeLastSection } from "@/lib/pipeline";
 
 let pass = 0;
 let fail = 0;
@@ -99,17 +102,54 @@ const badBody = `## 🔥 헬스장 고를 때 중요한 것
 완비된 최상의 서비스를 제공합니다.`;
 const badImg = 0;
 const bad = reviewChecklist({ bodyMd: badBody, imgMarkerCount: badImg, emojiLevel: 1 });
-check("불량 글 → 사진 슬롯 미충족 검출", bad.failed.some((f) => f.includes("사진")), bad.failed.join(" | "));
+check("사진 슬롯 0개여도 미충족 아님(강제 해제)", !bad.failed.some((f) => f.includes("사진")), bad.failed.join(" | "));
 check("불량 글 → 브로슈어 검출", bad.failed.some((f) => f.includes("브로슈어")), bad.failed.join(" | "));
 check("불량 글 → 이모지 헤더 검출", bad.failed.some((f) => f.includes("이모지 헤더")), bad.failed.join(" | "));
 check("불량 글 → 솔직한 흠 미충족", bad.failed.some((f) => f.includes("흠")), bad.failed.join(" | "));
 check("불량 글 → 일반론 도입 검출", bad.failed.some((f) => f.includes("일반론")), bad.failed.join(" | "));
 
+console.log("== 슬롯 과다 게이트(재료 부족 반려) ==");
+check("슬롯 카운트 정확", countSlotPlaceholders("[슬롯: 1개월 회비] 와 [슬롯: PT 가격]") === 2);
+const slotBody = `저는 3년차입니다. 벤치 대기에 지쳐 다녀왔어요.
+회비는 [슬롯: 1개월 회비], [슬롯: 3개월 회비], [슬롯: 12개월 회비]였고 PT는 [슬롯: PT 가격]이라고 안내받았어요.
+아쉬운 건 주차가 좀 불편하다는 점이에요.`;
+const slotChk = reviewChecklist({ bodyMd: slotBody, imgMarkerCount: 0, emojiLevel: 1 });
+check("슬롯 4개 → 체크리스트 미충족", slotChk.failed.some((f) => f.includes("[슬롯:")), slotChk.failed.join(" | "));
+check("슬롯 4개 → 반려 판정", slotOverflowRejection(slotBody)?.count === 4);
+check("슬롯 3개 이하 → 반려 아님", slotOverflowRejection(goodBody) === null);
+check("허용치 3", REVIEW_V1.slotMaxAllowed === 3);
+
 console.log("== reviewSpecBlock ==");
 const block = reviewSpecBlock(base());
-check("블록에 [슬롯] 강제 문구 포함", block.includes("[슬롯:"));
-check("블록에 최소 증거 수 반영", block.includes(`${REVIEW_V1.evidenceMin}종`));
-check("블록에 섹션 순서 6개", REVIEW_V1.sections.length === 6);
+check("블록에 [슬롯] 상한 문구 포함", block.includes("[슬롯:") && block.includes(`${REVIEW_V1.slotMaxAllowed}개를 넘기지 마라`));
+check("사진 슬롯 하한 강제 없음", !block.includes("최소 3개") && block.includes("0개여도"));
+check("섹션은 '참고 흐름'(고정 순서 아님)", block.includes("고정 순서 아님"));
+check("감정 곡선 강제 삭제", !block.includes("곡선을 만들어라"));
+
+console.log("== 네이버 후기 문체 규칙(preamble) ==");
+const pre = personaPreamble(base());
+check("장면 연출 금지 규칙 존재", pre.includes("장면을 연출·묘사하지 말고"));
+check("형 지적 나쁜 예 그대로 삽입", pre.includes("처음 간 날엔 입구에서 괜히 한 번 멈췄어요"));
+check("좋은 예 그대로 삽입", pre.includes("첫날이라 문이 어디에 있는지도 몰라 헤맸네요"));
+
+console.log("== 길이 확장 삽입 위치(마무리 뒤에 새 섹션이 붙지 않는가) ==");
+{
+  const body = `## 첫 섹션\n\n내용1\n\n## 마지막 섹션\n\n마무리 문단입니다. 방문 전 예약 문의 주세요.`;
+  const merged = insertBeforeLastSection(body, `## 새 섹션\n\n추가 내용`);
+  check("마무리 섹션이 여전히 맨 뒤", merged.trimEnd().endsWith("방문 전 예약 문의 주세요."), merged);
+  check("새 섹션이 마지막 섹션 앞에 삽입", merged.indexOf("## 새 섹션") < merged.indexOf("## 마지막 섹션"));
+  check("기존 섹션 순서 보존", merged.indexOf("## 첫 섹션") < merged.indexOf("## 새 섹션"));
+  const single = `## 하나뿐인 섹션\n\n마무리`;
+  check(
+    "H2가 1개뿐이면 종전대로 덧붙임",
+    insertBeforeLastSection(single, "## 새 섹션\n\n추가").trimEnd().endsWith("추가")
+  );
+  const noHeading = `제목 없는 본문입니다.`;
+  check(
+    "H2가 없으면 종전대로 덧붙임",
+    insertBeforeLastSection(noHeading, "## 새 섹션\n\n추가").startsWith("제목 없는 본문입니다.")
+  );
+}
 
 console.log(`\n결과: ${pass} pass / ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);

@@ -10,6 +10,7 @@ import { Sparkles, Info } from "lucide-react";
 import { SchedulePicker } from "@/components/ui/schedule-picker";
 import { AGE_GROUP_OPTIONS } from "@/lib/age-style";
 import { GENDER_OPTIONS } from "@/lib/gender-style";
+import { STYLE_CATEGORIES } from "@/lib/style-samples-core";
 
 export type PersonaEditorValues = {
   purpose: string;
@@ -41,6 +42,8 @@ export type BlogEditorValues = {
   blogTitle: string;
   blogUrl: string;
   niche: string;
+  /** 문체 샘플(베스트 후기 원문) 매칭용 업종 카테고리. "" = 미지정. */
+  category: string;
   status: "active" | "paused" | "archived";
   cron: string;
   jitterMin: number;
@@ -131,6 +134,21 @@ export function PersonaEditor({
             placeholder="예: 음식점·F&B, 부동산, 라이프스타일"
           />
         </div>
+        <Field
+          name="category"
+          label="업종 카테고리 (문체 샘플 매칭)"
+          hint="선택하면 [베스트 후기 원문]에 등록된 같은 카테고리 글의 문체를 초안 생성에 참고합니다. 미지정이면 참고하지 않습니다."
+          render={
+            <Select id="category" name="category" defaultValue={blog.category}>
+              <option value="">미지정 (문체 샘플 사용 안 함)</option>
+              {STYLE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </Select>
+          }
+        />
         <Field
           name="blogUrl"
           label="블로그 URL"

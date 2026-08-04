@@ -64,6 +64,9 @@ export const blogs = sqliteTable("blogs", {
   blogTitle: text("blog_title"),                     // 실제 블로그 제목
   blogUrl: text("blog_url"),                         // https://blog.naver.com/...
   niche: text("niche"),                              // 맛집 / 부동산 / 라이프 등
+  /* 문체 샘플(style_samples) 매칭용 업종 카테고리. niche 는 자유 텍스트라 매칭 기준이
+     못 되므로 별도 고정 목록을 둔다. null = 미지정(샘플 주입 건너뜀 = 기존 동작). */
+  category: text("category"),
   language: text("language").notNull().default("ko"),
   status: text("status", { enum: ["active", "paused", "archived"] })
     .notNull()
@@ -374,6 +377,28 @@ export const notifications = sqliteTable("notifications", {
   sentAt: text("sent_at"),
   readAt: text("read_at"),
   createdAt: text("created_at").notNull().default(sql`(CURRENT_TIMESTAMP)`),
+});
+
+/* =========================================================================
+   STYLE_SAMPLES — 어드민이 직접 붙여넣는 '베스트 후기 원문'
+   - 자동 수집이 불가(네이버는 블로그 본문 API 미제공)해서, 운영자가 좋은 글을
+     골라 원문 그대로 보관한다. 초안 생성 시 카테고리가 맞는 활성 샘플을
+     few-shot 으로 주입해 '문체만' 참고시킨다(내용·고유명사 차용은 금지).
+   - category 는 STYLE_CATEGORIES(src/lib/style-samples.ts) 14종 중 하나.
+     enum 대신 text 로 두어, 카테고리 추가 시 마이그레이션이 필요 없게 한다.
+   ========================================================================= */
+export const styleSamples = sqliteTable("style_samples", {
+  id: id(),
+  category: text("category").notNull(),
+  title: text("title").notNull().default(""),
+  body: text("body").notNull().default(""),      // 원문 전문(마크다운 렌더링 안 함)
+  sourceUrl: text("source_url"),
+  memo: text("memo"),                            // "이 글의 어디가 좋은지" 운영자 메모
+  // 규칙 기반 문체 지표(LLM 호출 없음). 저장 시 자동 계산 — 없거나 구버전이면 읽을 때 재계산.
+  styleMetricsJson: text("style_metrics_json"),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  ...timestamps,
 });
 
 /* =========================================================================

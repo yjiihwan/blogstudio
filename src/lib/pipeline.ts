@@ -40,11 +40,18 @@ import {
   topicNeedsDomainMaterial,
   domainMaterialPrompt,
   filterDomainMaterial,
+  REVIEW_V1,
+  countSlotPlaceholders,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
 import { sendTelegramToUser } from "./telegram";
 import { globalGuideBlock, getGlobalWritingGuide } from "./global-guide";
+import {
+  loadStyleMetricsDirective,
+  loadStyleSamples,
+  styleSampleBlock,
+} from "./style-samples";
 import { saveImageBuffer } from "./storage";
 
 /**
@@ -361,7 +368,25 @@ async function reviewVerifyPass(opts: {
   };
 }
 
-const REVIEW_V1_PASS = 7; // §7: 7점 미만 재작성
+const REVIEW_V1_PASS = REVIEW_V1.rubricPassScore; // 완화된 기준(6)과 동기화 — 하드코딩 금지
+
+/**
+ * `[슬롯: …]` 과다 = 재료 부족. 검토 대기(ready_for_review)로 올리지 않고 반려(failed)한다.
+ * WHY: 페르소나의 시설·기구·회비가 비어 있으면 LLM이 채울 사실이 없어 '양식지' 같은 글이 나온다.
+ * 그대로 검토 대기에 쌓이면 검수자가 원인을 모른 채 빈칸 글을 받는다(실제 18개짜리 초안 발생).
+ * 플레이스홀더 장치 자체는 할루시네이션 방지에 필요하므로 유지하고, 과다일 때만 출고를 막는다.
+ */
+export function slotOverflowRejection(bodyMd: string): { count: number; reason: string } | null {
+  const count = countSlotPlaceholders(bodyMd);
+  if (count <= REVIEW_V1.slotMaxAllowed) return null;
+  return {
+    count,
+    reason:
+      `⛔ 재료 부족으로 반려: 본문에 [슬롯: …] 플레이스홀더가 ${count}개 남았습니다(허용 ${REVIEW_V1.slotMaxAllowed}개). ` +
+      `페르소나에 시설·기구·회비 정보가 없어 글에 쓸 사실이 부족한 상태입니다. ` +
+      `페르소나 정보를 채우고 다시 생성하세요.`,
+  };
+}
 
 /** 검수자 노출용 issue 라벨 조립(seoIssues 에 얹음). */
 function buildReviewIssues(
@@ -381,10 +406,25 @@ function buildReviewIssues(
  * 목표 길이에 못 미친 본문을 목표까지 반복 확장한다(최대 3패스).
  * WHY: 모델은 큰 분량을 단일 패스로 잘 안 따른다(자동·반자동 공통). "전체를 다시 길게 써라"는
  * 방식은 gpt-4o가 비슷한 길이로 리라이트해버려 증가가 안 됐다(실측 982자에서 정체).
- * 그래서 "아직 안 다룬 소주제로 이어질 새 H2 섹션만 작성"하게 하고 기존 본문 뒤에 덧붙인다 —
+ * 그래서 "아직 안 다룬 소주제로 이어질 새 H2 섹션만 작성"하게 하고 기존 본문에 끼워 넣는다 —
  * 증가가 구조적으로 보장되고 모델이 훨씬 잘 따른다. 목표의 95%에 도달하거나 새 내용을
  * 못 만들면 중단한다. 자동·반자동 경로가 이 한 함수를 공유한다.
  */
+/**
+ * 확장 섹션을 '마지막 H2 섹션' **앞**에 끼워 넣는다.
+ * WHY: 그냥 뒤에 붙이면 원본의 마무리·CTA 문단 뒤로 새 섹션이 이어져 글이 끝났다가 다시
+ * 시작한다(실측: 2026-08-04 검증 3편 중 길이 확장이 돈 2편에서 전부 발생). 마무리는 본문
+ * 마지막 섹션에 들어있으므로, 그 섹션을 항상 맨 뒤에 남기면 흐름이 깨지지 않는다.
+ * H2가 없거나 1개뿐이면 끼워 넣을 자리가 없으니 종전대로 덧붙인다.
+ */
+export function insertBeforeLastSection(body: string, add: string): string {
+  const idx = body.lastIndexOf("\n## ");
+  if (idx < 0) return `${body.trimEnd()}\n\n${add}`;
+  const head = body.slice(0, idx).trimEnd();
+  const lastSection = body.slice(idx + 1).trimEnd();
+  return `${head}\n\n${add}\n\n${lastSection}`;
+}
+
 async function expandBodyToTarget(opts: {
   rawBody: string;
   lengthTarget: number;
@@ -415,7 +455,7 @@ async function expandBodyToTarget(opts: {
         {
           role: "user",
           content: [
-            `# 작업: 아래 블로그 본문에 이어질 새 섹션을 작성`,
+            `# 작업: 아래 블로그 본문 '중간'에 끼워 넣을 새 섹션을 작성`,
             `현재 본문은 공백 제외 약 ${cur}자입니다. 목표 약 ${opts.lengthTarget}자까지 약 ${gap}자가 더 필요합니다.`,
             `아래 "기존 본문"에서 아직 다루지 않은 소주제로 새 H2(##) 섹션을 ${addSections}개 작성하세요. 각 섹션은 공백 제외 300~500자 분량의 구체적 내용으로.`,
             `- 기존 본문 내용을 반복하지 말고, 새로운 정보·관점·이용 팁·자주 묻는 질문 등으로 다양화하세요.`,
@@ -429,6 +469,7 @@ async function expandBodyToTarget(opts: {
                   .map((s) => `    · ${s}`)
                   .join("\n")}`
               : null,
+            `- 이 섹션들은 **기존 본문의 마지막 섹션 앞에** 삽입됩니다. 글을 마무리하는 문장("마지막으로", "정리하자면", "도움이 되셨길")으로 끝내지 말고, 뒤에 다른 섹션이 더 이어지는 중간 섹션처럼 쓰세요.`,
             `- 제목(#)·인사말·마무리 CTA·이미지 마커(<!-- IMG -->)는 넣지 마세요. 오직 새 ## 섹션 본문만 출력.`,
             ``,
             `**기존 본문 (참고용 — 다시 출력하지 마세요)**:`,
@@ -452,7 +493,7 @@ async function expandBodyToTarget(opts: {
     outTokens += more.outputTokens;
     costCents += more.costCents;
     if (noWs(add) < 80) break; // 모델이 새 내용을 못 만들면 직전 최선값 유지하고 중단
-    rawBody = `${rawBody.trimEnd()}\n\n${add}`;
+    rawBody = insertBeforeLastSection(rawBody, add);
     cur = noWs(rawBody);
   }
   return { bodyMd: rawBody, inTokens, outTokens, costCents };
@@ -550,10 +591,18 @@ function mergeAugment(augment?: AugmentArg): { supplements: string[]; stalled: b
  * 시스템 프롬프트 = 서비스 전체 공통 가이드(최우선) + 블로그 페르소나.
  * 모든 초안 생성/재작성이 이걸 써서, 전역 규칙이 페르소나보다 우선 적용된다.
  */
-async function buildSystemPreamble(persona: PersonaInput): Promise<string> {
+export async function buildSystemPreamble(persona: PersonaInput): Promise<string> {
   const guide = await globalGuideBlock();
   const personaText = personaPreamble(persona);
-  return [guide, personaText].filter(Boolean).join("\n\n");
+  /* 문체 샘플 few-shot — 카테고리 미지정이거나 등록 0편이면 빈 문자열이라
+     프롬프트가 기존과 완전히 동일해진다(회귀 금지). */
+  const samples = await loadStyleSamples(persona.category);
+  /* 지표 집계는 활성 샘플 «전체» 기준(원문은 count 편으로 제한돼도 목표 수치는 넓게 잡는다).
+     원문이 0편이면 styleSampleBlock 이 빈 문자열이라 지시문도 함께 사라진다. */
+  const metrics = samples.length ? await loadStyleMetricsDirective(persona.category) : "";
+  return [guide, personaText, styleSampleBlock(samples, metrics)]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function safeJson<T = unknown>(text: string): T | null {
@@ -603,6 +652,7 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
     emojiIntensity: (p.emojiIntensity === 0 || p.emojiIntensity === 1 || p.emojiIntensity === 2 || p.emojiIntensity === 3
       ? p.emojiIntensity
       : null) as PersonaInput["emojiIntensity"],
+    category: blog.category ?? null,
     notes: p.notes,
   };
 }
@@ -962,6 +1012,7 @@ export async function generateDraftForBlog(
   }
 
   /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
+  const slotReject = slotOverflowRejection(bodyMd);
   const draftValues = {
       blogId,
       topicId: topicRow!.id,
@@ -969,11 +1020,12 @@ export async function generateDraftForBlog(
       summary: topicRow!.angle ?? null,
       bodyMd,
       imagePlanJson: JSON.stringify(outline.imagePlan),
-      status: "ready_for_review" as const,
+      status: (slotReject ? "failed" : "ready_for_review") as "failed" | "ready_for_review",
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
       seoScore: seo.score,
       seoIssuesJson: JSON.stringify([
+        ...(slotReject ? [slotReject.reason] : []),
         ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
         ...(guard.removed.length
           ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
@@ -1025,8 +1077,10 @@ export async function generateDraftForBlog(
 
   await db.insert(schema.notifications).values({
     type: "draft_ready",
-    title: `초안 준비됨 — ${blog.displayName}`,
-    body: draft.title,
+    title: slotReject
+      ? `초안 반려(재료 부족) — ${blog.displayName}`
+      : `초안 준비됨 — ${blog.displayName}`,
+    body: slotReject ? `${draft.title} — ${slotReject.reason}` : draft.title,
     linkUrl: `/queue/${draft.id}`,
     channel: "inapp",
   });
@@ -1035,9 +1089,11 @@ export async function generateDraftForBlog(
   if (callerUserId) {
     void sendTelegramToUser(
       callerUserId,
-      `📝 새 초안이 생성되었습니다!\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
+      slotReject
+        ? `⛔ 초안이 재료 부족으로 반려되었습니다.\n블로그: ${blog.displayName}\n제목: ${draft.title}\n사유: [슬롯:] 플레이스홀더 ${slotReject.count}개 잔존(허용 ${REVIEW_V1.slotMaxAllowed}개) — 페르소나의 시설·기구·회비 정보를 채운 뒤 다시 생성해 주세요.`
+        : `📝 새 초안이 생성되었습니다!\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
     );
-    if (userShotItems.length > 0) {
+    if (!slotReject && userShotItems.length > 0) {
       void sendTelegramToUser(
         callerUserId,
         `🖼️ 이미지 업로드가 필요합니다!\n블로그: ${blog.displayName}\n요청된 이미지를 업로드해 주세요.`
@@ -1315,6 +1371,7 @@ export async function generateDraftFromBrief(opts: {
   const totalCostCents = outlineRes.costCents + dm.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
 
   /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
+  const slotReject = slotOverflowRejection(bodyMd);
   const draftValues = {
       blogId: opts.blogId,
       topicId: topicRow.id,
@@ -1322,11 +1379,12 @@ export async function generateDraftFromBrief(opts: {
       summary: brief ? brief.slice(0, 200) : null,
       bodyMd,
       imagePlanJson: JSON.stringify(outline.imagePlan),
-      status: "ready_for_review" as const,
+      status: (slotReject ? "failed" : "ready_for_review") as "failed" | "ready_for_review",
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
       seoScore: seo.score,
       seoIssuesJson: JSON.stringify([
+        ...(slotReject ? [slotReject.reason] : []),
         ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
         ...(guard.removed.length
           ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
@@ -1397,8 +1455,10 @@ export async function generateDraftFromBrief(opts: {
 
   await db.insert(schema.notifications).values({
     type: "draft_ready",
-    title: `초안 준비됨 — ${blog.displayName}`,
-    body: draft.title,
+    title: slotReject
+      ? `초안 반려(재료 부족) — ${blog.displayName}`
+      : `초안 준비됨 — ${blog.displayName}`,
+    body: slotReject ? `${draft.title} — ${slotReject.reason}` : draft.title,
     linkUrl: `/queue/${draft.id}`,
     channel: "inapp",
   });
@@ -1406,7 +1466,9 @@ export async function generateDraftFromBrief(opts: {
   if (opts.callerUserId) {
     void sendTelegramToUser(
       opts.callerUserId,
-      `📝 새 초안이 생성되었습니다! (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
+      slotReject
+        ? `⛔ 초안이 재료 부족으로 반려되었습니다. (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n사유: [슬롯:] 플레이스홀더 ${slotReject.count}개 잔존(허용 ${REVIEW_V1.slotMaxAllowed}개) — 페르소나의 시설·기구·회비 정보를 채운 뒤 다시 생성해 주세요.`
+        : `📝 새 초안이 생성되었습니다! (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
     );
   }
 

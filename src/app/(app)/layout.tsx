@@ -13,6 +13,7 @@ import {
   CalendarClock,
   Users,
   UserCircle,
+  BookOpenText,
 } from "lucide-react";
 
 export default async function AppLayout({
@@ -48,7 +49,10 @@ export default async function AppLayout({
         { href: "/settings", label: "설정", icon: <Settings className="size-5" /> },
         { href: "/account", label: "내 계정", icon: <UserCircle className="size-5" /> },
         ...(user.role === "admin"
-          ? [{ href: "/admin/users", label: "사용자 관리", icon: <Users className="size-5" /> }]
+          ? [
+              { href: "/admin/users", label: "사용자 관리", icon: <Users className="size-5" /> },
+              { href: "/admin/style-samples", label: "베스트 후기 원문", icon: <BookOpenText className="size-5" /> },
+            ]
           : []),
       ]}
     >

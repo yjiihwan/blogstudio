@@ -12,6 +12,7 @@ import { requireUser, scopeByBlogId, scopeBlogsWhere } from "@/lib/auth";
 
 const STATUSES = [
   "ready_for_review",
+  "failed", // 생성 실패 + 재료 부족 반려(슬롯 과다) — 운영자가 원인을 찾을 수 있게 노출
   "revising",
   "approved",
   "published",
