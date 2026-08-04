@@ -1,6 +1,10 @@
 /**
  * 완화 작업(2026-08-04) 실측 덤프 — 실제 코드 경로가 만들어내는 프롬프트 전문 + 게이트 판정.
  * LLM 호출 없음(결정론). 실행: npx tsx scripts/relax_prompt_dump_20260804.mts
+ *
+ * 2026-08-04 확장: 「베스트 후기 원문」(style_samples) 주입 결과도 함께 덤프한다.
+ *   - DB 에 실제 등록된 샘플로 덤프하려면: STYLE_SAMPLE_CATEGORY=헬스 npx tsx scripts/...
+ *     (DATABASE_URL 이 가리키는 DB 를 읽는다. 미지정이면 내장 예시 샘플로 블록만 보여준다.)
  */
 import {
   personaPreamble,
@@ -14,6 +18,12 @@ import {
   type PersonaInput,
 } from "@/lib/llm/prompts";
 import { slotOverflowRejection } from "@/lib/pipeline";
+import {
+  styleSampleBlock,
+  truncateSample,
+  DEFAULT_STYLE_SAMPLE_CONFIG,
+  type StyleSampleRef,
+} from "@/lib/style-samples-core";
 
 /** prod 실측 페르소나 재현 — 엔짐 영등포점(1인칭 + facilities 빈 배열). */
 const ydp: PersonaInput = {
@@ -112,5 +122,53 @@ out.push(`슬롯 개수: ${countSlotPlaceholders(okDraft)}개`);
 const chk2 = reviewChecklist({ bodyMd: okDraft, imgMarkerCount: 0, emojiLevel: 1 });
 out.push(`reviewChecklist 미충족: ${chk2.failed.length ? chk2.failed.join(" | ") : "(없음) ✅"}`);
 out.push(`slotOverflowRejection: ${slotOverflowRejection(okDraft) ? "반려" : "통과 ✅"}`);
+
+/* =========================================================================
+   7. 베스트 후기 원문(style_samples) 주입 — 실제 buildSystemPreamble 이 붙이는 블록
+   ========================================================================= */
+const FALLBACK_SAMPLES: StyleSampleRef[] = [
+  {
+    title: "(내장 예시) 동네 헬스장 3개월 후기",
+    body: `이사하고 나서 운동을 다시 시작했는데요. 집에서 걸어서 5분 거리라 그냥 여기로 정했어요.
+근데 막상 다녀보니 저녁 시간엔 사람이 좀 많더라고요. 8시 넘어가면 벤치가 다 차 있어요.
+참고로 락커는 따로 돈 안 받고 그냥 쓸 수 있었습니다. 수건도 주고요.
+아무튼 3개월 끊었는데 지금까진 만족해요.`,
+  },
+];
+
+async function loadFromDbOrFallback(): Promise<{ label: string; samples: StyleSampleRef[] }> {
+  const cat = process.env.STYLE_SAMPLE_CATEGORY?.trim();
+  if (!cat) return { label: "내장 예시 샘플(DB 미조회)", samples: FALLBACK_SAMPLES };
+  const { loadStyleSamples, getStyleSampleConfig } = await import("@/lib/style-samples");
+  const cfg = await getStyleSampleConfig();
+  const rows = await loadStyleSamples(cat, cfg);
+  return {
+    label: `DB 조회 — category="${cat}", 설정 count=${cfg.count} maxChars=${cfg.maxChars}, 조회 ${rows.length}편`,
+    samples: rows,
+  };
+}
+
+const loaded = await loadFromDbOrFallback();
+
+h("7. styleSampleBlock — 프롬프트에 실제로 주입되는 문체 샘플 블록");
+out.push(`출처: ${loaded.label}`);
+out.push(
+  `기본 설정: count=${DEFAULT_STYLE_SAMPLE_CONFIG.count}편 · maxChars=${DEFAULT_STYLE_SAMPLE_CONFIG.maxChars}자/편`
+);
+for (const s of loaded.samples) {
+  const t = truncateSample(s.body, DEFAULT_STYLE_SAMPLE_CONFIG.maxChars);
+  out.push(`  - "${s.title}" ${s.body.length}자${t.truncated ? " (상한 초과 → 앞부분만 사용)" : ""}`);
+}
+out.push("");
+out.push(loaded.samples.length ? styleSampleBlock(loaded.samples) : "(샘플 0편 → 빈 문자열)");
+
+h("8. 회귀 검사 — 샘플 0편이면 블록이 완전히 비어야 한다(기존 프롬프트 그대로)");
+const emptyBlock = styleSampleBlock([]);
+out.push(`styleSampleBlock([]) === "" : ${emptyBlock === "" ? "✅ 통과" : "❌ 실패"}`);
+out.push(
+  `본문이 공백뿐인 샘플도 제외되는가: ${
+    styleSampleBlock([{ title: "빈 글", body: "   " }]) === "" ? "✅ 통과" : "❌ 실패"
+  }`
+);
 
 console.log(out.join("\n"));

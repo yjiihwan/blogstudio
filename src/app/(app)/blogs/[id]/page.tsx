@@ -84,6 +84,7 @@ export default async function BlogEditPage({
           blogTitle: blog.blogTitle ?? "",
           blogUrl: blog.blogUrl ?? "",
           niche: blog.niche ?? "",
+          category: blog.category ?? "",
           status: blog.status,
           cron: sched?.cron ?? "0 7 * * 1",
           jitterMin: sched?.jitterMin ?? 60,

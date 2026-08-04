@@ -49,6 +49,7 @@ export default async function NewBlogPage({
           blogTitle: "",
           blogUrl: "",
           niche: "",
+          category: "",
           status: "active",
           cron: "0 7 * * 1",
           jitterMin: 60,

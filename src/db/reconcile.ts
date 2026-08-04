@@ -33,6 +33,8 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
   ],
   blogs: [
     { name: "owner_id", ddl: "`owner_id` text REFERENCES `users`(`id`)" },
+    // 문체 샘플 매칭용 업종 카테고리(0010). null = 미지정 → 샘플 주입 건너뜀.
+    { name: "category", ddl: "`category` text" },
   ],
   personas: [
     { name: "age_group", ddl: "`age_group` text" },
@@ -44,12 +46,43 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
   ],
 };
 
+/**
+ * 신규 '테이블' 자가복구. EXPECTED 는 컬럼만 보강하므로, 후속 마이그레이션이 만든
+ * 테이블 자체가 운영 볼륨에 없으면(=journal 어긋남·부분 실패) 조회가 "no such table"로 깨진다.
+ * CREATE TABLE IF NOT EXISTS 라 멱등·비파괴다. DDL 은 drizzle 마이그레이션 원문과 동일하게 유지할 것.
+ */
+const EXPECTED_TABLES: Array<{ name: string; ddl: string }> = [
+  {
+    name: "style_samples", // drizzle/0010_style_samples.sql
+    ddl: `CREATE TABLE IF NOT EXISTS \`style_samples\` (
+      \`id\` text PRIMARY KEY NOT NULL,
+      \`category\` text NOT NULL,
+      \`title\` text DEFAULT '' NOT NULL,
+      \`body\` text DEFAULT '' NOT NULL,
+      \`source_url\` text,
+      \`memo\` text,
+      \`is_active\` integer DEFAULT true NOT NULL,
+      \`sort_order\` integer DEFAULT 0 NOT NULL,
+      \`created_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL,
+      \`updated_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL
+    )`,
+  },
+];
+
 type MinimalSqlite = {
   prepare: (sql: string) => { all: () => Array<{ name: string }> };
   exec: (sql: string) => void;
 };
 
 export function reconcileSchema(sqlite: MinimalSqlite): void {
+  for (const t of EXPECTED_TABLES) {
+    try {
+      sqlite.exec(t.ddl);
+    } catch (err) {
+      console.error(`[reconcile] FAILED create table ${t.name}:`, String(err));
+    }
+  }
+
   for (const [table, columns] of Object.entries(EXPECTED)) {
     // 테이블 자체가 없으면(초기 0000 미적용) 정석 마이그레이션 영역이므로 건너뛴다.
     let existing: Set<string>;

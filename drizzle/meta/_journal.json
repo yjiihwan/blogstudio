@@ -71,6 +71,13 @@
       "when": 1784116403422,
       "tag": "0009_grey_orphan",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785814541689,
+      "tag": "0010_style_samples",
+      "breakpoints": true
     }
   ]
 }

@@ -47,6 +47,7 @@ import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
 import { sendTelegramToUser } from "./telegram";
 import { globalGuideBlock, getGlobalWritingGuide } from "./global-guide";
+import { loadStyleSamples, styleSampleBlock } from "./style-samples";
 import { saveImageBuffer } from "./storage";
 
 /**
@@ -589,7 +590,10 @@ function mergeAugment(augment?: AugmentArg): { supplements: string[]; stalled: b
 async function buildSystemPreamble(persona: PersonaInput): Promise<string> {
   const guide = await globalGuideBlock();
   const personaText = personaPreamble(persona);
-  return [guide, personaText].filter(Boolean).join("\n\n");
+  /* 문체 샘플 few-shot — 카테고리 미지정이거나 등록 0편이면 빈 문자열이라
+     프롬프트가 기존과 완전히 동일해진다(회귀 금지). */
+  const samples = await loadStyleSamples(persona.category);
+  return [guide, personaText, styleSampleBlock(samples)].filter(Boolean).join("\n\n");
 }
 
 function safeJson<T = unknown>(text: string): T | null {
@@ -639,6 +643,7 @@ function personaFromRow(blog: typeof schema.blogs.$inferSelect, p: typeof schema
     emojiIntensity: (p.emojiIntensity === 0 || p.emojiIntensity === 1 || p.emojiIntensity === 2 || p.emojiIntensity === 3
       ? p.emojiIntensity
       : null) as PersonaInput["emojiIntensity"],
+    category: blog.category ?? null,
     notes: p.notes,
   };
 }

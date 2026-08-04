@@ -40,6 +40,11 @@ export type PersonaInput = {
   writingTemplate?: WritingTemplate | null;
   /** 화자 페르소나 명시 override(사용자 입력 우선). 없으면 pointOfView/niche에서 도출. (축A) */
   speakerPersona?: SpeakerPersona | null;
+  /**
+   * 문체 샘플(style_samples) 매칭용 업종 카테고리(blogs.category). null/미지정이면
+   * 샘플 주입을 건너뛴다 = 기존 동작 그대로. (src/lib/style-samples.ts)
+   */
+  category?: string | null;
   notes: string | null;
 };
 
