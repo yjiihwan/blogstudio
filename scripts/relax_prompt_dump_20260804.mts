@@ -24,6 +24,11 @@ import {
   DEFAULT_STYLE_SAMPLE_CONFIG,
   type StyleSampleRef,
 } from "@/lib/style-samples-core";
+import {
+  aggregateStyleMetrics,
+  computeStyleMetrics,
+  styleMetricsDirective,
+} from "@/lib/style-metrics";
 
 /** prod 실측 페르소나 재현 — 엔짐 영등포점(1인칭 + facilities 빈 배열). */
 const ydp: PersonaInput = {
@@ -136,15 +141,30 @@ const FALLBACK_SAMPLES: StyleSampleRef[] = [
   },
 ];
 
-async function loadFromDbOrFallback(): Promise<{ label: string; samples: StyleSampleRef[] }> {
+async function loadFromDbOrFallback(): Promise<{
+  label: string;
+  samples: StyleSampleRef[];
+  directive: string;
+}> {
   const cat = process.env.STYLE_SAMPLE_CATEGORY?.trim();
-  if (!cat) return { label: "내장 예시 샘플(DB 미조회)", samples: FALLBACK_SAMPLES };
-  const { loadStyleSamples, getStyleSampleConfig } = await import("@/lib/style-samples");
+  if (!cat) {
+    // DB 미조회여도 지표 지시문이 어떻게 생겼는지는 보여준다(내장 예시로 즉석 계산).
+    const agg = aggregateStyleMetrics(FALLBACK_SAMPLES.map((s) => computeStyleMetrics(s.body)));
+    return {
+      label: "내장 예시 샘플(DB 미조회)",
+      samples: FALLBACK_SAMPLES,
+      directive: styleMetricsDirective(agg),
+    };
+  }
+  const { loadStyleSamples, getStyleSampleConfig, loadStyleMetricsDirective } = await import(
+    "@/lib/style-samples"
+  );
   const cfg = await getStyleSampleConfig();
   const rows = await loadStyleSamples(cat, cfg);
   return {
     label: `DB 조회 — category="${cat}", 설정 count=${cfg.count} maxChars=${cfg.maxChars}, 조회 ${rows.length}편`,
     samples: rows,
+    directive: rows.length ? await loadStyleMetricsDirective(cat) : "",
   };
 }
 
@@ -157,10 +177,45 @@ out.push(
 );
 for (const s of loaded.samples) {
   const t = truncateSample(s.body, DEFAULT_STYLE_SAMPLE_CONFIG.maxChars);
-  out.push(`  - "${s.title}" ${s.body.length}자${t.truncated ? " (상한 초과 → 앞부분만 사용)" : ""}`);
+  const m = computeStyleMetrics(s.body);
+  out.push(
+    `  - "${s.title}" ${s.body.length}자${t.truncated ? " (상한 초과 → 앞부분만 사용)" : ""}` +
+      ` | 평균문장 ${m.avgSentenceChars}자 · 도입부 ${m.introType} · 상위어미 ${
+        m.endings[0] ? `${m.endings[0].label} ${m.endings[0].ratio}%` : "—"
+      }`
+  );
 }
 out.push("");
-out.push(loaded.samples.length ? styleSampleBlock(loaded.samples) : "(샘플 0편 → 빈 문자열)");
+out.push(
+  loaded.samples.length
+    ? styleSampleBlock(loaded.samples, loaded.directive)
+    : "(샘플 0편 → 빈 문자열)"
+);
+
+/* --- 7-1. 지표 계산 실증: 편별 지표를 그대로 펼쳐 본다 --- */
+h("7-1. 편별 문체 지표 (규칙 기반 · LLM 호출 없음)");
+for (const s of loaded.samples) {
+  const m = computeStyleMetrics(s.body);
+  out.push(`### ${s.title}`);
+  out.push(
+    `  문장 평균 ${m.avgSentenceChars}자 / 중앙값 ${m.medianSentenceChars}자 / 최장 ${m.longestSentence.chars}자 / 최단 ${m.shortestSentence.chars}자`
+  );
+  out.push(
+    `  ${m.paragraphCount}문단 · ${m.sentenceCount}문장 · 문단당 ${m.avgSentencesPerParagraph}문장 · 총 ${m.totalChars}자(공백제외 ${m.totalCharsNoSpace}자)`
+  );
+  out.push(`  종결어미: ${m.endings.map((e) => `${e.label} ${e.ratio}%`).join(" · ") || "—"}`);
+  out.push(`  도입부: ${m.introType}${m.introEvidence ? ` (${m.introEvidence})` : ""}`);
+  out.push(
+    `  군말: ${m.fillers.map((f) => `${f.label} ${f.count}회`).join(" · ") || "—"} (1000자당 ${m.fillerPer1000}회)`
+  );
+  out.push(
+    `  문어체·번역투: ${m.formal.items.map((f) => `${f.label} ${f.count}회`).join(" · ") || "없음"} · 피동형 ${m.formal.passiveCount}회 (1000자당 ${m.formal.per1000}회)`
+  );
+  out.push("");
+}
+
+h("7-2. styleMetricsDirective — 프롬프트에 들어가는 «목표 문체» 자연어 지시문");
+out.push(loaded.directive || "(집계 불가 → 빈 문자열)");
 
 h("8. 회귀 검사 — 샘플 0편이면 블록이 완전히 비어야 한다(기존 프롬프트 그대로)");
 const emptyBlock = styleSampleBlock([]);
@@ -169,6 +224,17 @@ out.push(
   `본문이 공백뿐인 샘플도 제외되는가: ${
     styleSampleBlock([{ title: "빈 글", body: "   " }]) === "" ? "✅ 통과" : "❌ 실패"
   }`
+);
+out.push(
+  `지표 지시문이 있어도 샘플 0편이면 비는가: ${
+    styleSampleBlock([], loaded.directive) === "" ? "✅ 통과" : "❌ 실패"
+  }`
+);
+out.push(
+  `aggregateStyleMetrics([]) === null : ${aggregateStyleMetrics([]) === null ? "✅ 통과" : "❌ 실패"}`
+);
+out.push(
+  `styleMetricsDirective(null) === "" : ${styleMetricsDirective(null) === "" ? "✅ 통과" : "❌ 실패"}`
 );
 
 console.log(out.join("\n"));

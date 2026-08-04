@@ -36,6 +36,10 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
     // 문체 샘플 매칭용 업종 카테고리(0010). null = 미지정 → 샘플 주입 건너뜀.
     { name: "category", ddl: "`category` text" },
   ],
+  style_samples: [
+    // 규칙 기반 문체 지표(0011). null = 미계산 → 읽을 때 즉석 계산으로 대체된다.
+    { name: "style_metrics_json", ddl: "`style_metrics_json` text" },
+  ],
   personas: [
     { name: "age_group", ddl: "`age_group` text" },
     { name: "gender", ddl: "`gender` text" },

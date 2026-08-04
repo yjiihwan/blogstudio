@@ -394,6 +394,8 @@ export const styleSamples = sqliteTable("style_samples", {
   body: text("body").notNull().default(""),      // 원문 전문(마크다운 렌더링 안 함)
   sourceUrl: text("source_url"),
   memo: text("memo"),                            // "이 글의 어디가 좋은지" 운영자 메모
+  // 규칙 기반 문체 지표(LLM 호출 없음). 저장 시 자동 계산 — 없거나 구버전이면 읽을 때 재계산.
+  styleMetricsJson: text("style_metrics_json"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
   ...timestamps,

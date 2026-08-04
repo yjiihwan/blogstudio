@@ -7,9 +7,11 @@ import { requireAdmin } from "@/lib/auth";
 import {
   normalizeCategory,
   normalizeConfig,
+  recomputeAllStyleMetrics,
   saveStyleSampleConfig,
   type StyleCategory,
 } from "@/lib/style-samples";
+import { computeStyleMetrics } from "@/lib/style-metrics";
 
 export type SaveResult =
   | { ok: true; id: string }
@@ -48,6 +50,8 @@ export async function saveSampleAction(input: SampleInput): Promise<SaveResult> 
     memo: input.memo.trim() || null,
     isActive: !!input.isActive,
     sortOrder: Number.isFinite(input.sortOrder) ? Math.trunc(input.sortOrder) : 0,
+    // 규칙 기반이라 LLM 비용 0 — 저장할 때마다 본문에서 다시 뽑는다.
+    styleMetricsJson: JSON.stringify(computeStyleMetrics(input.body)),
     updatedAt: new Date().toISOString(),
   };
 
@@ -83,6 +87,16 @@ export async function toggleActiveAction(id: string, isActive: boolean) {
     .set({ isActive, updatedAt: new Date().toISOString() })
     .where(eq(schema.styleSamples.id, id));
   revalidatePath("/admin/style-samples");
+}
+
+/** 기존 저장분 일괄 재계산. force=true 면 최신 버전이어도 다시 뽑는다(규칙 변경 후 사용). */
+export async function recomputeMetricsAction(
+  force = true
+): Promise<{ scanned: number; updated: number }> {
+  await requireAdmin();
+  const r = await recomputeAllStyleMetrics(force);
+  revalidatePath("/admin/style-samples");
+  return r;
 }
 
 export async function saveConfigAction(count: number, maxChars: number) {

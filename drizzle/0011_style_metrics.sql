@@ -1,0 +1,1 @@
+ALTER TABLE `style_samples` ADD `style_metrics_json` text;

@@ -7,14 +7,16 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, Save, Search, AlertTriangle, Check } from "lucide-react";
+import { Plus, Trash2, Save, Search, AlertTriangle, Check, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { STYLE_CATEGORIES, type StyleSampleConfig } from "@/lib/style-samples-core";
+import { computeStyleMetrics } from "@/lib/style-metrics";
 import {
   saveSampleAction,
   deleteSampleAction,
   saveConfigAction,
+  recomputeMetricsAction,
   type SampleInput,
 } from "./actions";
 
@@ -160,7 +162,18 @@ export function StyleSampleWorkbench({
 
   return (
     <div className="space-y-4">
-      <ConfigBar config={config} onSaved={() => setToast("설정을 저장했습니다.")} />
+      <ConfigBar
+        config={config}
+        onSaved={() => setToast("설정을 저장했습니다.")}
+        onRecomputed={(msg) => setToast(msg)}
+      />
+
+      {/* 편집 패널이 닫혀 있어도 재계산 결과가 보이도록 상단에도 토스트를 둔다. */}
+      {toast && !editing && (
+        <div className="rounded-lg border border-leaf-500/40 bg-leaf-500/10 px-3 py-2 text-sm text-ink-700">
+          {toast}
+        </div>
+      )}
 
       {/* 카테고리별 등록 개수 — 어디가 비었는지 한눈에 */}
       <div className="rounded-lg border border-paper-300 bg-paper-50 p-3">
@@ -346,6 +359,8 @@ export function StyleSampleWorkbench({
                 </label>
               </div>
 
+              <MetricsPanel body={editing.body} />
+
               <div className="flex flex-wrap items-center gap-4 pt-1">
                 <label className="inline-flex items-center gap-2 text-sm">
                   <input
@@ -371,6 +386,104 @@ export function StyleSampleWorkbench({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 문체 지표 — 읽기 전용. 서버가 저장할 때 쓰는 것과 «같은 순수 함수»로 즉석 계산해서,
+ * 붙여넣는 순간 바로 보이고 저장분과 어긋나지도 않는다. 차트 없이 담백한 목록.
+ */
+function MetricsPanel({ body }: { body: string }) {
+  const m = useMemo(() => computeStyleMetrics(body), [body]);
+  if (!m.sentenceCount) {
+    return (
+      <div className="rounded-lg border border-paper-300 bg-paper-100 px-3 py-2.5 text-xs text-ink-400">
+        문체 지표 — 본문을 붙여넣으면 자동으로 계산됩니다.
+      </div>
+    );
+  }
+  const pct = (t: { label: string; ratio: number }) => `${t.label} ${t.ratio}%`;
+  return (
+    <div className="rounded-lg border border-paper-300 bg-paper-100 px-3 py-2.5">
+      <div className="text-xs font-semibold text-ink-700 mb-2">
+        문체 지표 <span className="font-normal text-ink-400">(자동 계산 · 읽기 전용)</span>
+      </div>
+      <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-xs">
+        <Row k="문장 길이">
+          평균 <b className="tabular-nums">{m.avgSentenceChars}</b>자 · 중앙값{" "}
+          <b className="tabular-nums">{m.medianSentenceChars}</b>자
+        </Row>
+        <Row k="최장 / 최단">
+          <span className="tabular-nums">{m.longestSentence.chars}</span>자 /{" "}
+          <span className="tabular-nums">{m.shortestSentence.chars}</span>자
+        </Row>
+        <Row k="분량">
+          {m.totalChars.toLocaleString()}자 (공백 제외 {m.totalCharsNoSpace.toLocaleString()}자)
+        </Row>
+        <Row k="문단 / 문장">
+          {m.paragraphCount}문단 · {m.sentenceCount}문장 · 문단당{" "}
+          <b className="tabular-nums">{m.avgSentencesPerParagraph}</b>문장
+        </Row>
+        <Row k="도입부 유형">
+          {m.introType === "unknown" ? (
+            <span className="text-ink-400">unknown (규칙으로 판별 안 됨)</span>
+          ) : (
+            <>
+              <b>{m.introType}</b>
+              {m.introEvidence && (
+                <span className="text-ink-400"> — {m.introEvidence}</span>
+              )}
+            </>
+          )}
+        </Row>
+        <Row k="군말 빈도">
+          1000자당 <b className="tabular-nums">{m.fillerPer1000}</b>회
+        </Row>
+        <Row k="종결어미 상위" wide>
+          {m.endings.length ? m.endings.map(pct).join(" · ") : "—"}
+        </Row>
+        <Row k="구어체 군말" wide>
+          {m.fillers.length
+            ? m.fillers.map((f) => `${f.label} ${f.count}회`).join(" · ")
+            : "—"}
+        </Row>
+        <Row k="문어체·번역투" wide>
+          {m.formal.items.length || m.formal.passiveCount ? (
+            <>
+              {m.formal.items.map((f) => `${f.label} ${f.count}회`).join(" · ")}
+              {m.formal.passiveCount > 0 && ` · 피동형 ${m.formal.passiveCount}회`}
+              <span className="text-ink-400"> (1000자당 {m.formal.per1000}회)</span>
+            </>
+          ) : (
+            <span className="text-leaf-500">없음 — 구어체로 잘 쓰인 글</span>
+          )}
+        </Row>
+        <Row k="최장 문장" wide>
+          <span className="text-ink-500 line-clamp-2">{m.longestSentence.text}</span>
+        </Row>
+      </dl>
+      <p className="mt-2 text-[11px] text-ink-400">
+        저장 시 이 값이 함께 기록되고, 같은 카테고리 활성 샘플의 평균이 «목표 문체»
+        지시문으로 초안 프롬프트에 들어갑니다.
+      </p>
+    </div>
+  );
+}
+
+function Row({
+  k,
+  wide,
+  children,
+}: {
+  k: string;
+  wide?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={wide ? "sm:col-span-2 flex gap-2" : "flex gap-2"}>
+      <dt className="shrink-0 w-[76px] text-ink-500">{k}</dt>
+      <dd className="min-w-0 text-ink-800">{children}</dd>
     </div>
   );
 }
@@ -406,9 +519,11 @@ function CountChip({
 function ConfigBar({
   config,
   onSaved,
+  onRecomputed,
 }: {
   config: StyleSampleConfig;
   onSaved: () => void;
+  onRecomputed: (msg: string) => void;
 }) {
   const router = useRouter();
   const [count, setCount] = useState(config.count);
@@ -450,6 +565,22 @@ function ConfigBar({
         }}
       >
         설정 저장
+      </Button>
+      {/* 지표 도입 이전에 저장된 샘플·규칙 변경분을 한 번에 메꾼다. */}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          const r = await recomputeMetricsAction(true);
+          setBusy(false);
+          onRecomputed(`문체 지표 재계산 완료 — ${r.scanned}편 중 ${r.updated}편 갱신`);
+          router.refresh();
+        }}
+      >
+        <RefreshCw className="size-4" /> 지표 재계산
       </Button>
       <span className="text-xs text-ink-400">
         편수 0 = 주입 안 함 · 상한 초과분은 앞부분만 사용

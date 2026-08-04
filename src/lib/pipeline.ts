@@ -47,7 +47,11 @@ import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
 import { sendTelegramToUser } from "./telegram";
 import { globalGuideBlock, getGlobalWritingGuide } from "./global-guide";
-import { loadStyleSamples, styleSampleBlock } from "./style-samples";
+import {
+  loadStyleMetricsDirective,
+  loadStyleSamples,
+  styleSampleBlock,
+} from "./style-samples";
 import { saveImageBuffer } from "./storage";
 
 /**
@@ -587,13 +591,18 @@ function mergeAugment(augment?: AugmentArg): { supplements: string[]; stalled: b
  * 시스템 프롬프트 = 서비스 전체 공통 가이드(최우선) + 블로그 페르소나.
  * 모든 초안 생성/재작성이 이걸 써서, 전역 규칙이 페르소나보다 우선 적용된다.
  */
-async function buildSystemPreamble(persona: PersonaInput): Promise<string> {
+export async function buildSystemPreamble(persona: PersonaInput): Promise<string> {
   const guide = await globalGuideBlock();
   const personaText = personaPreamble(persona);
   /* 문체 샘플 few-shot — 카테고리 미지정이거나 등록 0편이면 빈 문자열이라
      프롬프트가 기존과 완전히 동일해진다(회귀 금지). */
   const samples = await loadStyleSamples(persona.category);
-  return [guide, personaText, styleSampleBlock(samples)].filter(Boolean).join("\n\n");
+  /* 지표 집계는 활성 샘플 «전체» 기준(원문은 count 편으로 제한돼도 목표 수치는 넓게 잡는다).
+     원문이 0편이면 styleSampleBlock 이 빈 문자열이라 지시문도 함께 사라진다. */
+  const metrics = samples.length ? await loadStyleMetricsDirective(persona.category) : "";
+  return [guide, personaText, styleSampleBlock(samples, metrics)]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function safeJson<T = unknown>(text: string): T | null {

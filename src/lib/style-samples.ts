@@ -20,7 +20,33 @@ import {
   type StyleSampleRef,
 } from "./style-samples-core";
 
-export * from "./style-samples-core";
+// WHY: `export *` 는 tsx(ESM) 런타임에서 재노출이 안 잡히는 경우가 있어 명시적으로 나열한다.
+export {
+  STYLE_CATEGORIES,
+  STYLE_SAMPLE_CONFIG_KEY,
+  STYLE_SAMPLE_GUARD,
+  STYLE_SAMPLE_GUARD_TAIL,
+  DEFAULT_STYLE_SAMPLE_CONFIG,
+  isStyleCategory,
+  normalizeCategory,
+  normalizeConfig,
+  truncateSample,
+  styleSampleBlock,
+} from "./style-samples-core";
+export type {
+  StyleCategory,
+  StyleSampleConfig,
+  StyleSampleRef,
+} from "./style-samples-core";
+
+import {
+  aggregateStyleMetrics,
+  computeStyleMetrics,
+  parseStyleMetrics,
+  styleMetricsDirective,
+  type StyleMetrics,
+  type StyleMetricsAggregate,
+} from "./style-metrics";
 
 export async function getStyleSampleConfig(): Promise<StyleSampleConfig> {
   try {
@@ -74,4 +100,61 @@ export async function loadStyleSamples(
     console.error("[style-samples] load failed:", String(err));
     return [];
   }
+}
+
+/* ============================================================
+   문체 지표 — 저장 시 계산, 카테고리 단위 집계
+   ============================================================ */
+
+/** 저장된 지표를 읽되, 없거나 구버전이면 본문에서 즉석 재계산(순수 함수라 비용 없음). */
+export function metricsOf(row: { body: string; styleMetricsJson: string | null }): StyleMetrics {
+  return parseStyleMetrics(row.styleMetricsJson) ?? computeStyleMetrics(row.body);
+}
+
+/**
+ * 카테고리의 «활성 샘플 전체»로 지표를 집계한다.
+ * WHY: 프롬프트에 넣는 원문은 count 편으로 제한되지만, 목표 수치는 등록된 글 전부를
+ * 근거로 잡는 게 표본이 크고 안정적이다(요청 사양 ②).
+ */
+export async function loadStyleMetricsAggregate(
+  category: string | null | undefined
+): Promise<StyleMetricsAggregate | null> {
+  const cat = normalizeCategory(category);
+  if (!cat) return null;
+  try {
+    const rows = await db.query.styleSamples.findMany({
+      where: and(eq(schema.styleSamples.category, cat), eq(schema.styleSamples.isActive, true)),
+      orderBy: [asc(schema.styleSamples.sortOrder), asc(schema.styleSamples.createdAt)],
+    });
+    return aggregateStyleMetrics(
+      rows.filter((r) => r.body?.trim()).map((r) => metricsOf(r))
+    );
+  } catch (err) {
+    console.error("[style-samples] metrics aggregate failed:", String(err));
+    return null;
+  }
+}
+
+/** 프롬프트에 실을 자연어 지시문. 샘플 0편이면 빈 문자열(기존 동작 유지). */
+export async function loadStyleMetricsDirective(
+  category: string | null | undefined
+): Promise<string> {
+  return styleMetricsDirective(await loadStyleMetricsAggregate(category));
+}
+
+/** 저장된 지표가 없거나 구버전인 행을 전부 재계산한다. 반환 = {검사, 갱신}. */
+export async function recomputeAllStyleMetrics(
+  force = false
+): Promise<{ scanned: number; updated: number }> {
+  const rows = await db.query.styleSamples.findMany();
+  let updated = 0;
+  for (const r of rows) {
+    if (!force && parseStyleMetrics(r.styleMetricsJson)) continue;
+    await db
+      .update(schema.styleSamples)
+      .set({ styleMetricsJson: JSON.stringify(computeStyleMetrics(r.body)) })
+      .where(eq(schema.styleSamples.id, r.id));
+    updated += 1;
+  }
+  return { scanned: rows.length, updated };
 }

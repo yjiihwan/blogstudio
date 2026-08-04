@@ -104,10 +104,18 @@ export const STYLE_SAMPLE_GUARD_TAIL = [
 
 /**
  * 시스템 프롬프트에 끼울 few-shot 블록. 샘플 0편이면 빈 문자열(= 기존 프롬프트 그대로).
+ *
+ * metricsDirective = 그 카테고리 활성 샘플 전체에서 뽑은 «목표 문체 지표» 자연어 지시문.
+ * 원문과 지표 사이가 아니라 원문 «뒤»에 붙인다 — 긴 예문 뒤에서 지시가 희석되는 걸 막고,
+ * 마지막은 언제나 유출 방지 가드가 오도록 순서를 고정한다.
  */
-export function styleSampleBlock(samples: StyleSampleRef[]): string {
+export function styleSampleBlock(
+  samples: StyleSampleRef[],
+  metricsDirective?: string
+): string {
   const list = (samples ?? []).filter((s) => s?.body?.trim());
   if (!list.length) return "";
+  const directive = (metricsDirective ?? "").trim();
   return [
     STYLE_SAMPLE_GUARD,
     "",
@@ -118,6 +126,7 @@ export function styleSampleBlock(samples: StyleSampleRef[]): string {
       "```",
       "",
     ]),
+    ...(directive ? [directive, ""] : []),
     STYLE_SAMPLE_GUARD_TAIL,
   ].join("\n");
 }
