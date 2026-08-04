@@ -401,10 +401,25 @@ function buildReviewIssues(
  * 목표 길이에 못 미친 본문을 목표까지 반복 확장한다(최대 3패스).
  * WHY: 모델은 큰 분량을 단일 패스로 잘 안 따른다(자동·반자동 공통). "전체를 다시 길게 써라"는
  * 방식은 gpt-4o가 비슷한 길이로 리라이트해버려 증가가 안 됐다(실측 982자에서 정체).
- * 그래서 "아직 안 다룬 소주제로 이어질 새 H2 섹션만 작성"하게 하고 기존 본문 뒤에 덧붙인다 —
+ * 그래서 "아직 안 다룬 소주제로 이어질 새 H2 섹션만 작성"하게 하고 기존 본문에 끼워 넣는다 —
  * 증가가 구조적으로 보장되고 모델이 훨씬 잘 따른다. 목표의 95%에 도달하거나 새 내용을
  * 못 만들면 중단한다. 자동·반자동 경로가 이 한 함수를 공유한다.
  */
+/**
+ * 확장 섹션을 '마지막 H2 섹션' **앞**에 끼워 넣는다.
+ * WHY: 그냥 뒤에 붙이면 원본의 마무리·CTA 문단 뒤로 새 섹션이 이어져 글이 끝났다가 다시
+ * 시작한다(실측: 2026-08-04 검증 3편 중 길이 확장이 돈 2편에서 전부 발생). 마무리는 본문
+ * 마지막 섹션에 들어있으므로, 그 섹션을 항상 맨 뒤에 남기면 흐름이 깨지지 않는다.
+ * H2가 없거나 1개뿐이면 끼워 넣을 자리가 없으니 종전대로 덧붙인다.
+ */
+export function insertBeforeLastSection(body: string, add: string): string {
+  const idx = body.lastIndexOf("\n## ");
+  if (idx < 0) return `${body.trimEnd()}\n\n${add}`;
+  const head = body.slice(0, idx).trimEnd();
+  const lastSection = body.slice(idx + 1).trimEnd();
+  return `${head}\n\n${add}\n\n${lastSection}`;
+}
+
 async function expandBodyToTarget(opts: {
   rawBody: string;
   lengthTarget: number;
@@ -435,7 +450,7 @@ async function expandBodyToTarget(opts: {
         {
           role: "user",
           content: [
-            `# 작업: 아래 블로그 본문에 이어질 새 섹션을 작성`,
+            `# 작업: 아래 블로그 본문 '중간'에 끼워 넣을 새 섹션을 작성`,
             `현재 본문은 공백 제외 약 ${cur}자입니다. 목표 약 ${opts.lengthTarget}자까지 약 ${gap}자가 더 필요합니다.`,
             `아래 "기존 본문"에서 아직 다루지 않은 소주제로 새 H2(##) 섹션을 ${addSections}개 작성하세요. 각 섹션은 공백 제외 300~500자 분량의 구체적 내용으로.`,
             `- 기존 본문 내용을 반복하지 말고, 새로운 정보·관점·이용 팁·자주 묻는 질문 등으로 다양화하세요.`,
@@ -449,6 +464,7 @@ async function expandBodyToTarget(opts: {
                   .map((s) => `    · ${s}`)
                   .join("\n")}`
               : null,
+            `- 이 섹션들은 **기존 본문의 마지막 섹션 앞에** 삽입됩니다. 글을 마무리하는 문장("마지막으로", "정리하자면", "도움이 되셨길")으로 끝내지 말고, 뒤에 다른 섹션이 더 이어지는 중간 섹션처럼 쓰세요.`,
             `- 제목(#)·인사말·마무리 CTA·이미지 마커(<!-- IMG -->)는 넣지 마세요. 오직 새 ## 섹션 본문만 출력.`,
             ``,
             `**기존 본문 (참고용 — 다시 출력하지 마세요)**:`,
@@ -472,7 +488,7 @@ async function expandBodyToTarget(opts: {
     outTokens += more.outputTokens;
     costCents += more.costCents;
     if (noWs(add) < 80) break; // 모델이 새 내용을 못 만들면 직전 최선값 유지하고 중단
-    rawBody = `${rawBody.trimEnd()}\n\n${add}`;
+    rawBody = insertBeforeLastSection(rawBody, add);
     cur = noWs(rawBody);
   }
   return { bodyMd: rawBody, inTokens, outTokens, costCents };
