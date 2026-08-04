@@ -60,3 +60,6 @@ deploy_artifacts/
 
 # 로컬 이미지 저장소(볼륨 대체)
 /storage/
+
+# 후기 코퍼스 원본(제3자 블로그 텍스트 — 내부 참고용, 재발행/커밋 금지)
+/data/review_corpus/raw/
