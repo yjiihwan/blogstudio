@@ -40,6 +40,8 @@ import {
   topicNeedsDomainMaterial,
   domainMaterialPrompt,
   filterDomainMaterial,
+  REVIEW_V1,
+  countSlotPlaceholders,
 } from "./llm/prompts";
 import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
@@ -361,7 +363,25 @@ async function reviewVerifyPass(opts: {
   };
 }
 
-const REVIEW_V1_PASS = 7; // §7: 7점 미만 재작성
+const REVIEW_V1_PASS = REVIEW_V1.rubricPassScore; // 완화된 기준(6)과 동기화 — 하드코딩 금지
+
+/**
+ * `[슬롯: …]` 과다 = 재료 부족. 검토 대기(ready_for_review)로 올리지 않고 반려(failed)한다.
+ * WHY: 페르소나의 시설·기구·회비가 비어 있으면 LLM이 채울 사실이 없어 '양식지' 같은 글이 나온다.
+ * 그대로 검토 대기에 쌓이면 검수자가 원인을 모른 채 빈칸 글을 받는다(실제 18개짜리 초안 발생).
+ * 플레이스홀더 장치 자체는 할루시네이션 방지에 필요하므로 유지하고, 과다일 때만 출고를 막는다.
+ */
+export function slotOverflowRejection(bodyMd: string): { count: number; reason: string } | null {
+  const count = countSlotPlaceholders(bodyMd);
+  if (count <= REVIEW_V1.slotMaxAllowed) return null;
+  return {
+    count,
+    reason:
+      `⛔ 재료 부족으로 반려: 본문에 [슬롯: …] 플레이스홀더가 ${count}개 남았습니다(허용 ${REVIEW_V1.slotMaxAllowed}개). ` +
+      `페르소나에 시설·기구·회비 정보가 없어 글에 쓸 사실이 부족한 상태입니다. ` +
+      `페르소나 정보를 채우고 다시 생성하세요.`,
+  };
+}
 
 /** 검수자 노출용 issue 라벨 조립(seoIssues 에 얹음). */
 function buildReviewIssues(
@@ -962,6 +982,7 @@ export async function generateDraftForBlog(
   }
 
   /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
+  const slotReject = slotOverflowRejection(bodyMd);
   const draftValues = {
       blogId,
       topicId: topicRow!.id,
@@ -969,11 +990,12 @@ export async function generateDraftForBlog(
       summary: topicRow!.angle ?? null,
       bodyMd,
       imagePlanJson: JSON.stringify(outline.imagePlan),
-      status: "ready_for_review" as const,
+      status: (slotReject ? "failed" : "ready_for_review") as "failed" | "ready_for_review",
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
       seoScore: seo.score,
       seoIssuesJson: JSON.stringify([
+        ...(slotReject ? [slotReject.reason] : []),
         ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
         ...(guard.removed.length
           ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
@@ -1025,8 +1047,10 @@ export async function generateDraftForBlog(
 
   await db.insert(schema.notifications).values({
     type: "draft_ready",
-    title: `초안 준비됨 — ${blog.displayName}`,
-    body: draft.title,
+    title: slotReject
+      ? `초안 반려(재료 부족) — ${blog.displayName}`
+      : `초안 준비됨 — ${blog.displayName}`,
+    body: slotReject ? `${draft.title} — ${slotReject.reason}` : draft.title,
     linkUrl: `/queue/${draft.id}`,
     channel: "inapp",
   });
@@ -1035,9 +1059,11 @@ export async function generateDraftForBlog(
   if (callerUserId) {
     void sendTelegramToUser(
       callerUserId,
-      `📝 새 초안이 생성되었습니다!\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
+      slotReject
+        ? `⛔ 초안이 재료 부족으로 반려되었습니다.\n블로그: ${blog.displayName}\n제목: ${draft.title}\n사유: [슬롯:] 플레이스홀더 ${slotReject.count}개 잔존(허용 ${REVIEW_V1.slotMaxAllowed}개) — 페르소나의 시설·기구·회비 정보를 채운 뒤 다시 생성해 주세요.`
+        : `📝 새 초안이 생성되었습니다!\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
     );
-    if (userShotItems.length > 0) {
+    if (!slotReject && userShotItems.length > 0) {
       void sendTelegramToUser(
         callerUserId,
         `🖼️ 이미지 업로드가 필요합니다!\n블로그: ${blog.displayName}\n요청된 이미지를 업로드해 주세요.`
@@ -1315,6 +1341,7 @@ export async function generateDraftFromBrief(opts: {
   const totalCostCents = outlineRes.costCents + dm.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
 
   /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
+  const slotReject = slotOverflowRejection(bodyMd);
   const draftValues = {
       blogId: opts.blogId,
       topicId: topicRow.id,
@@ -1322,11 +1349,12 @@ export async function generateDraftFromBrief(opts: {
       summary: brief ? brief.slice(0, 200) : null,
       bodyMd,
       imagePlanJson: JSON.stringify(outline.imagePlan),
-      status: "ready_for_review" as const,
+      status: (slotReject ? "failed" : "ready_for_review") as "failed" | "ready_for_review",
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
       seoScore: seo.score,
       seoIssuesJson: JSON.stringify([
+        ...(slotReject ? [slotReject.reason] : []),
         ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
         ...(guard.removed.length
           ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
@@ -1397,8 +1425,10 @@ export async function generateDraftFromBrief(opts: {
 
   await db.insert(schema.notifications).values({
     type: "draft_ready",
-    title: `초안 준비됨 — ${blog.displayName}`,
-    body: draft.title,
+    title: slotReject
+      ? `초안 반려(재료 부족) — ${blog.displayName}`
+      : `초안 준비됨 — ${blog.displayName}`,
+    body: slotReject ? `${draft.title} — ${slotReject.reason}` : draft.title,
     linkUrl: `/queue/${draft.id}`,
     channel: "inapp",
   });
@@ -1406,7 +1436,9 @@ export async function generateDraftFromBrief(opts: {
   if (opts.callerUserId) {
     void sendTelegramToUser(
       opts.callerUserId,
-      `📝 새 초안이 생성되었습니다! (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
+      slotReject
+        ? `⛔ 초안이 재료 부족으로 반려되었습니다. (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n사유: [슬롯:] 플레이스홀더 ${slotReject.count}개 잔존(허용 ${REVIEW_V1.slotMaxAllowed}개) — 페르소나의 시설·기구·회비 정보를 채운 뒤 다시 생성해 주세요.`
+        : `📝 새 초안이 생성되었습니다! (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
     );
   }
 
