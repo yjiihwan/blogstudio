@@ -70,6 +70,7 @@ export function StyleSampleWorkbench({
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
@@ -165,13 +166,20 @@ export function StyleSampleWorkbench({
       <ConfigBar
         config={config}
         onSaved={() => setToast("설정을 저장했습니다.")}
-        onRecomputed={(msg) => setToast(msg)}
+        onRecomputed={(msg) => setNotice(msg)}
       />
 
-      {/* 편집 패널이 닫혀 있어도 재계산 결과가 보이도록 상단에도 토스트를 둔다. */}
-      {toast && !editing && (
-        <div className="rounded-lg border border-leaf-500/40 bg-leaf-500/10 px-3 py-2 text-sm text-ink-700">
-          {toast}
+      {/* 재계산 결과는 «몇 편이 갱신됐는지»가 확인 대상이라 자동으로 지우지 않는다. */}
+      {notice && (
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-leaf-500/40 bg-leaf-500/10 px-3 py-2 text-sm text-ink-700">
+          <span>{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="shrink-0 text-xs text-ink-400 hover:text-ink-700"
+          >
+            닫기
+          </button>
         </div>
       )}
 
