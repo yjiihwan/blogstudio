@@ -7,6 +7,7 @@
  * 각 소스는 실패 사유 코드를 돌려주고, 시도 내역(attempts)은 images.sourceMetaJson 에 기록된다.
  * 자동 검증이 켜져 있으면 후보를 비전 모델로 심사해 첫 합격작을 채택한다(lib/image-judge.ts).
  * 요청당 심사 상한을 다 쓰면 채택하지 않고 judge_rejected(stop="budget_cap")로 실패 → 직접 촬영 안내.
+ * 상한 전에 후보가 바닥나 채택 없이 끝나도 같은 실패 처리 + 직접 촬영 안내(사유는 ShotFailKind 로 구분).
  * 재시도(같은 소스 반복 호출)는 하지 않는다.
  */
 import { db, schema } from "@/db/client";
@@ -55,6 +56,29 @@ export const FAIL_REASON_LABEL: Record<FailReason, string> = {
 
 /** 심사 상한 소진으로 중단된 시도 표시(attempts·로그에 그대로 남김) */
 export type StopReason = "budget_cap";
+
+/**
+ * 채택 없이 끝난 요청의 실패 구분(로그 stop·화면 안내). 전부 «직접 촬영 필요».
+ * budget_cap=심사 상한 소진 · judge_exhausted=후보를 다 심사했지만 불합격
+ * no_candidates=검색 결과 없음/다운로드 실패로 심사할 후보 자체가 없음 · source_error=켜진 소스가 오류(키·한도·네트워크·정책 등)로 실패
+ */
+export type ShotFailKind = "budget_cap" | "judge_exhausted" | "no_candidates" | "source_error";
+
+const NO_CANDIDATE_REASONS: ReadonlySet<FailReason> = new Set(["no_result", "download_failed", "disabled"]);
+
+export function classifyShotFail(attempts: Attempt[]): ShotFailKind {
+  if (attempts.some((a) => a.stop === "budget_cap")) return "budget_cap";
+  if (attempts.some((a) => a.reason === "judge_rejected")) return "judge_exhausted";
+  if (attempts.every((a) => NO_CANDIDATE_REASONS.has(a.reason ?? "unknown"))) return "no_candidates";
+  return "source_error";
+}
+
+const SHOT_FAIL_HEAD: Record<ShotFailKind, (rejectedCount: number) => string> = {
+  budget_cap: (n) => `심사 불합격(${n}장) — 묘사에 맞는 사진을 찾지 못했습니다.`,
+  judge_exhausted: (n) => `심사 불합격(${n}장) — 후보를 모두 심사했지만 묘사에 맞는 사진이 없습니다.`,
+  no_candidates: () => `후보 없음 — 묘사에 맞는 사진 후보를 찾지 못했습니다.`,
+  source_error: () => `소스 실패 — 켜진 사진 소스가 모두 실패했습니다.`,
+};
 
 /** 채택 이미지의 심사 기록(sourceMetaJson.judge) */
 export type JudgeRecord =
@@ -407,7 +431,7 @@ async function runGroup(
 
 type SourceByModeResult =
   | { ok: true; sourced: Sourced; attempts: Attempt[]; judge: JudgeContext; query?: string }
-  | { ok: false; error: string; attempts: Attempt[]; judge: JudgeContext; query?: string; needsUserShot?: boolean };
+  | { ok: false; error: string; attempts: Attempt[]; judge: JudgeContext; query?: string; needsUserShot?: boolean; failKind?: ShotFailKind };
 
 async function sourceByMode(mode: AutoMode, description: string, userId: string, feedback?: string): Promise<SourceByModeResult> {
   const res = await resolveImageSources(userId);
@@ -443,19 +467,18 @@ async function sourceByMode(mode: AutoMode, description: string, userId: string,
       return generateWithJudge((p) => genOpenAI(p, k), "gpt-image-1", description, feedback, judge);
     });
 
-  const fail = (prefix: string, attempts: Attempt[]): SourceByModeResult => {
-    if (attempts.some((a) => a.stop === "budget_cap")) {
-      const n = attempts.reduce((sum, a) => sum + (a.rejected?.length ?? 0), 0);
-      return {
-        ok: false,
-        error: `심사 불합격(${n}장) — 묘사에 맞는 사진을 찾지 못했습니다. 직접 촬영해 올려주세요. (${describeAttempts(attempts)})`,
-        attempts,
-        judge,
-        query,
-        needsUserShot: true,
-      };
-    }
-    return { ok: false, error: `${prefix} — ${describeAttempts(attempts)}`, attempts, judge, query };
+  const fail = (attempts: Attempt[]): SourceByModeResult => {
+    const kind = classifyShotFail(attempts);
+    const n = attempts.reduce((sum, a) => sum + (a.rejected?.length ?? 0), 0);
+    return {
+      ok: false,
+      error: `${SHOT_FAIL_HEAD[kind](n)} 직접 촬영해 올려주세요. (${describeAttempts(attempts)})`,
+      attempts,
+      judge,
+      query,
+      needsUserShot: true,
+      failKind: kind,
+    };
   };
   const success = (sourced: Sourced, attempts: Attempt[]): SourceByModeResult => ({ ok: true, sourced, attempts, judge, query });
 
@@ -464,14 +487,14 @@ async function sourceByMode(mode: AutoMode, description: string, userId: string,
       return { ok: false, error: "사용 중인 스톡 소스가 없습니다(설정에서 Unsplash/Pexels를 켜세요).", attempts: [], judge };
     const r = await runStock();
     if (r.sourced) return success(r.sourced, r.attempts);
-    return fail("스톡 이미지를 가져오지 못했습니다", r.attempts);
+    return fail(r.attempts);
   }
   if (mode === "ai") {
     if (!aiOn.length)
       return { ok: false, error: "사용 중인 AI 생성 소스가 없습니다(설정에서 Google Imagen/OpenAI gpt-image-1을 켜세요).", attempts: [], judge };
     const r = await runAi();
     if (r.sourced) return success(r.sourced, r.attempts);
-    return fail("AI 이미지 생성에 실패했습니다", r.attempts);
+    return fail(r.attempts);
   }
   // stock_then_ai
   if (!stockOn.length && !aiOn.length)
@@ -481,12 +504,12 @@ async function sourceByMode(mode: AutoMode, description: string, userId: string,
   const a = await runAi();
   const attempts = [...s.attempts, ...a.attempts];
   if (a.sourced) return success(a.sourced, attempts);
-  return fail("스톡·AI 모두 실패했습니다", attempts);
+  return fail(attempts);
 }
 
 export type AutoSourceResult =
   | { ok: true; provider: string; imageUrl: string; judge: JudgeRecord; attempts: Attempt[] }
-  | { ok: false; error: string; attempts: Attempt[]; needsUserShot?: boolean };
+  | { ok: false; error: string; attempts: Attempt[]; needsUserShot?: boolean; failKind?: ShotFailKind };
 
 /**
  * 사진 요청 1건을 자동 소싱해 저장하고 요청을 uploaded로 갱신한다.
@@ -520,12 +543,13 @@ export async function autoSourceForRequest(opts: {
       query: result.query,
       ...(result.ok
         ? { provider: result.sourced.meta.provider, judge: result.sourced.judge }
-        : { error: result.error, ...(result.needsUserShot ? { stop: "budget_cap", needsUserShot: true } : {}) }),
+        : { error: result.error, ...(result.failKind ? { stop: result.failKind, needsUserShot: true } : {}) }),
       attempts: result.attempts,
       judgeCalls: judgeSummary,
     })
   );
-  if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts, needsUserShot: result.needsUserShot };
+  if (!result.ok)
+    return { ok: false, error: result.error, attempts: result.attempts, needsUserShot: result.needsUserShot, failKind: result.failKind };
   const { sourced, attempts } = result;
 
   const { urlPath, size } = await saveImageBuffer(sourced.buffer, sourced.ext);
