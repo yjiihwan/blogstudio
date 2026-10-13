@@ -1,6 +1,6 @@
 "use server";
 
-import type { JudgeRecord, Attempt } from "@/lib/image-sourcing";
+import type { JudgeRecord, Attempt, ShotFailKind } from "@/lib/image-sourcing";
 
 import { revalidatePath } from "next/cache";
 import { db, schema } from "@/db/client";
@@ -84,6 +84,7 @@ export async function autoSourcePhotoAction(
   judge?: JudgeRecord;
   attempts?: Attempt[];
   needsUserShot?: boolean;
+  failKind?: ShotFailKind;
 }> {
   const user = await requireUser();
   if (!requestId) return { ok: false, error: "요청 ID가 없습니다." };
@@ -96,7 +97,7 @@ export async function autoSourcePhotoAction(
 
   const { autoSourceForRequest } = await import("@/lib/image-sourcing");
   const res = await autoSourceForRequest({ requestId, mode, userId: user.id, feedback });
-  if (!res.ok) return { ok: false, error: res.error, attempts: res.attempts, needsUserShot: res.needsUserShot };
+  if (!res.ok) return { ok: false, error: res.error, attempts: res.attempts, needsUserShot: res.needsUserShot, failKind: res.failKind };
   // revalidate는 안 함 — 같은 카드에서 미리보기/반려/재생성 루프를 돌 수 있도록 카드를 유지.
   return { ok: true, provider: res.provider, imageUrl: res.imageUrl, judge: res.judge, attempts: res.attempts };
 }
