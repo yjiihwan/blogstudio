@@ -1,21 +1,102 @@
 /**
  * 사진 요청 슬롯의 자동 이미지 소싱.
- *  - "stock"        : Unsplash → Pexels 에서 적절한 무료 이미지 검색
- *  - "ai"           : Google imagen → OpenAI(dall-e-3) 로 이미지 생성
- *  - "stock_then_ai": 스톡 먼저, 결과 없으면 AI 생성으로 폴백
- * 결과 이미지를 storage에 저장하고 images 행 + imageRequests(uploaded) 갱신.
+ *  - "stock"        : 스톡 소스(Unsplash/Pexels)를 설정된 순서로 검색
+ *  - "ai"           : AI 생성 소스(Google Imagen/OpenAI gpt-image-1)를 설정된 순서로 생성
+ *  - "stock_then_ai": 스톡 먼저, 실패하면 AI 생성으로 폴백
+ * 설정(사용여부·순서·자동검증)은 lib/image-source-config.ts, 키는 lib/image-keys.ts.
+ * 각 소스는 실패 사유 코드를 돌려주고, 시도 내역(attempts)은 images.sourceMetaJson 에 기록된다.
+ * 자동 검증이 켜져 있으면 후보를 비전 모델로 심사해 첫 합격작을 채택한다(lib/image-judge.ts).
+ * 요청당 심사 상한을 다 쓰면 채택하지 않고 judge_rejected(stop="budget_cap")로 실패 → 직접 촬영 안내.
+ * 재시도(같은 소스 반복 호출)는 하지 않는다.
  */
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
-import { resolveImageKeys } from "./image-keys";
-import { decryptApiKey } from "./crypto";
+import { resolveImageSources } from "./image-keys";
 import { llm } from "./llm";
 import OpenAI from "openai";
 import { saveImageBuffer, deleteImageFile } from "./storage";
+import { SOURCE_LABEL, type ImageSource, type ImageSourceConfig } from "./image-source-config";
+import {
+  createJudgeContext,
+  judgeImage,
+  judgeCapped,
+  budgetCapReason,
+  estimateJudgeCostUsd,
+  type JudgeContext,
+  type JudgeScore,
+} from "./image-judge";
 
 export type AutoMode = "stock" | "ai" | "stock_then_ai";
 
-type Sourced = { buffer: Buffer; mimeType: string; ext: string; source: "stock_free" | "ai_generated"; meta: Record<string, unknown> };
+export type FailReason =
+  | "disabled"
+  | "no_key"
+  | "auth_error"
+  | "rate_limit"
+  | "no_result"
+  | "download_failed"
+  | "policy_blocked"
+  | "network_error"
+  | "judge_rejected"
+  | "unknown";
+
+export const FAIL_REASON_LABEL: Record<FailReason, string> = {
+  disabled: "사용 꺼짐",
+  no_key: "키 없음",
+  auth_error: "키 오류",
+  rate_limit: "호출 한도 초과",
+  no_result: "검색 결과 없음",
+  download_failed: "다운로드 실패",
+  policy_blocked: "정책 차단",
+  network_error: "네트워크 오류",
+  judge_rejected: "심사 불합격",
+  unknown: "알 수 없는 오류",
+};
+
+/** 심사 상한 소진으로 중단된 시도 표시(attempts·로그에 그대로 남김) */
+export type StopReason = "budget_cap";
+
+/** 채택 이미지의 심사 기록(sourceMetaJson.judge) */
+export type JudgeRecord =
+  | { verified: "pass"; match: number; quality: number; issues: string[]; candidatesTried: number; model: string }
+  | { verified: "skipped"; reason: string; candidatesTried: number; model: string };
+
+export type Attempt = {
+  source: ImageSource;
+  result: "adopted" | "failed" | "skipped";
+  reason?: FailReason;
+  detail?: string;
+  candidatesTried?: number;
+  stop?: StopReason;
+  /** 탈락 후보들의 심사 점수(디버깅·보고용) */
+  rejected?: Array<{ match: number; quality: number; issues: string[] }>;
+};
+
+type Sourced = {
+  buffer: Buffer;
+  mimeType: string;
+  ext: string;
+  source: "stock_free" | "ai_generated";
+  meta: Record<string, unknown>;
+  judge: JudgeRecord;
+};
+
+type ProviderResult =
+  | { ok: true; sourced: Sourced; candidatesTried: number; rejected: JudgeScore[] }
+  | { ok: false; reason: FailReason; detail?: string; candidatesTried?: number; rejected?: JudgeScore[]; stop?: StopReason };
+
+function capped(judge: JudgeContext, rejected: JudgeScore[], unit: "장" | "회", candidatesTried: number): ProviderResult {
+  return {
+    ok: false,
+    reason: "judge_rejected",
+    detail: `${rejected.length}${unit} · ${budgetCapReason(judge)}`,
+    candidatesTried,
+    rejected,
+    stop: "budget_cap",
+  };
+}
+
+const STOCK_CANDIDATES = 5;
 
 /** 한국어 묘사(+선택 피드백) → 영어 스톡 검색 키워드 (실패 시 원문 폴백) */
 async function toEnglishQuery(description: string, userId: string, feedback?: string): Promise<string> {
@@ -54,180 +135,358 @@ async function fetchBytes(url: string): Promise<Buffer | null> {
   }
 }
 
-async function searchUnsplash(query: string, key: string): Promise<Sourced | null> {
+/** HTTP 상태 → 실패 사유. 401/403=키 오류, 429=한도, 나머지는 unknown(상태코드를 detail 에). */
+function httpFailure(status: number): { reason: FailReason; detail: string } {
+  if (status === 401 || status === 403) return { reason: "auth_error", detail: `${status}` };
+  if (status === 429) return { reason: "rate_limit", detail: `${status}` };
+  return { reason: "unknown", detail: `HTTP ${status}` };
+}
+
+type StockCandidate = { url: string; meta: Record<string, unknown> };
+
+/**
+ * 스톡 후보(상위 N장)를 순서대로 내려받아 심사, 첫 합격작 채택.
+ * 심사 생략(skipped)이면 그 후보를 그대로 채택(종전 방식).
+ */
+async function pickStockCandidate(
+  candidates: StockCandidate[],
+  description: string,
+  judge: JudgeContext
+): Promise<ProviderResult> {
+  let tried = 0;
+  let downloaded = 0;
+  const rejected: JudgeScore[] = [];
+  for (const c of candidates.slice(0, STOCK_CANDIDATES)) {
+    if (judgeCapped(judge)) return capped(judge, rejected, "장", tried);
+    tried += 1;
+    const buffer = await fetchBytes(c.url);
+    if (!buffer) continue;
+    downloaded += 1;
+    const verdict = await judgeImage(judge, buffer, "image/jpeg", description);
+    if (verdict.status === "capped") return capped(judge, rejected, "장", tried - 1);
+    if (verdict.status === "fail") {
+      rejected.push({ match: verdict.match, quality: verdict.quality, issues: verdict.issues });
+      continue;
+    }
+    const judgeRecord: JudgeRecord =
+      verdict.status === "pass"
+        ? { verified: "pass", match: verdict.match, quality: verdict.quality, issues: verdict.issues, candidatesTried: tried, model: judge.model }
+        : { verified: "skipped", reason: verdict.reason, candidatesTried: tried, model: judge.model };
+    return {
+      ok: true,
+      candidatesTried: tried,
+      rejected,
+      sourced: { buffer, mimeType: "image/jpeg", ext: "jpg", source: "stock_free", meta: c.meta, judge: judgeRecord },
+    };
+  }
+  if (downloaded === 0) return { ok: false, reason: "download_failed", detail: `${tried}장`, candidatesTried: tried };
+  return { ok: false, reason: "judge_rejected", detail: `${rejected.length}장`, candidatesTried: tried, rejected };
+}
+
+async function searchUnsplash(query: string, key: string, description: string, judge: JudgeContext): Promise<ProviderResult> {
+  let r: Response;
   try {
-    const r = await fetch(
-      `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape&content_filter=high`,
+    r = await fetch(
+      `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=${STOCK_CANDIDATES}&orientation=landscape&content_filter=high`,
       { headers: { Authorization: `Client-ID ${key}` }, cache: "no-store" }
     );
-    if (!r.ok) return null;
-    const data = (await r.json()) as {
-      results?: Array<{ urls?: { regular?: string }; user?: { name?: string }; links?: { html?: string } }>;
-    };
-    const hit = data.results?.[0];
-    const url = hit?.urls?.regular;
-    if (!url) return null;
-    const buffer = await fetchBytes(url);
-    if (!buffer) return null;
-    return {
-      buffer,
-      mimeType: "image/jpeg",
-      ext: "jpg",
-      source: "stock_free",
-      meta: { provider: "unsplash", query, author: hit?.user?.name, link: hit?.links?.html },
-    };
-  } catch {
-    return null;
+  } catch (err) {
+    return { ok: false, reason: "network_error", detail: errMsg(err) };
   }
+  if (!r.ok) return { ok: false, ...httpFailure(r.status) };
+  let data: { results?: Array<{ urls?: { regular?: string }; user?: { name?: string }; links?: { html?: string } }> };
+  try {
+    data = (await r.json()) as typeof data;
+  } catch {
+    return { ok: false, reason: "unknown", detail: "응답 파싱 실패" };
+  }
+  const candidates: StockCandidate[] = (data.results ?? [])
+    .filter((h) => !!h.urls?.regular)
+    .map((h) => ({ url: h.urls!.regular!, meta: { provider: "unsplash", query, author: h.user?.name, link: h.links?.html } }));
+  if (!candidates.length) return { ok: false, reason: "no_result" };
+  return pickStockCandidate(candidates, description, judge);
 }
 
-async function searchPexels(query: string, key: string): Promise<Sourced | null> {
+async function searchPexels(query: string, key: string, description: string, judge: JudgeContext): Promise<ProviderResult> {
+  let r: Response;
   try {
-    const r = await fetch(
-      `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape`,
+    r = await fetch(
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${STOCK_CANDIDATES}&orientation=landscape`,
       { headers: { Authorization: key }, cache: "no-store" }
     );
-    if (!r.ok) return null;
-    const data = (await r.json()) as {
-      photos?: Array<{ src?: { large?: string }; photographer?: string; url?: string }>;
-    };
-    const hit = data.photos?.[0];
-    const url = hit?.src?.large;
-    if (!url) return null;
-    const buffer = await fetchBytes(url);
-    if (!buffer) return null;
-    return {
-      buffer,
-      mimeType: "image/jpeg",
-      ext: "jpg",
-      source: "stock_free",
-      meta: { provider: "pexels", query, author: hit?.photographer, link: hit?.url },
-    };
-  } catch {
-    return null;
+  } catch (err) {
+    return { ok: false, reason: "network_error", detail: errMsg(err) };
   }
+  if (!r.ok) return { ok: false, ...httpFailure(r.status) };
+  let data: { photos?: Array<{ src?: { large?: string }; photographer?: string; url?: string }> };
+  try {
+    data = (await r.json()) as typeof data;
+  } catch {
+    return { ok: false, reason: "unknown", detail: "응답 파싱 실패" };
+  }
+  const candidates: StockCandidate[] = (data.photos ?? [])
+    .filter((h) => !!h.src?.large)
+    .map((h) => ({ url: h.src!.large!, meta: { provider: "pexels", query, author: h.photographer, link: h.url } }));
+  if (!candidates.length) return { ok: false, reason: "no_result" };
+  return pickStockCandidate(candidates, description, judge);
 }
 
-async function genImagen(description: string, key: string, feedback?: string): Promise<Sourced | null> {
+type GenResult =
+  | { ok: true; buffer: Buffer; mimeType: string }
+  | { ok: false; reason: FailReason; detail?: string };
+
+/**
+ * AI 생성 공통: 생성 → 심사 → 불합격이면 issues 를 프롬프트에 반영해 1회 재생성 → 재심사.
+ * 재심사도 불합격이면 judge_rejected. 심사 생략이면 첫 결과 채택.
+ */
+async function generateWithJudge(
+  gen: (prompt: string) => Promise<GenResult>,
+  provider: string,
+  description: string,
+  feedback: string | undefined,
+  judge: JudgeContext
+): Promise<ProviderResult> {
+  const rejected: JudgeScore[] = [];
+  let avoid: string[] = [];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    // 심사 못 할 이미지를 유료로 생성하지 않는다.
+    if (judgeCapped(judge)) return capped(judge, rejected, "회", attempt - 1);
+    const g = await gen(aiPrompt(description, feedback, avoid));
+    if (!g.ok) {
+      return { ok: false, reason: g.reason, detail: attempt === 2 ? `재생성 실패${g.detail ? ` · ${g.detail}` : ""}` : g.detail, candidatesTried: attempt, rejected };
+    }
+    const verdict = await judgeImage(judge, g.buffer, g.mimeType, description);
+    if (verdict.status === "capped") return capped(judge, rejected, "회", attempt - 1);
+    if (verdict.status === "fail") {
+      rejected.push({ match: verdict.match, quality: verdict.quality, issues: verdict.issues });
+      avoid = verdict.issues;
+      continue;
+    }
+    const judgeRecord: JudgeRecord =
+      verdict.status === "pass"
+        ? { verified: "pass", match: verdict.match, quality: verdict.quality, issues: verdict.issues, candidatesTried: attempt, model: judge.model }
+        : { verified: "skipped", reason: verdict.reason, candidatesTried: attempt, model: judge.model };
+    return {
+      ok: true,
+      candidatesTried: attempt,
+      rejected,
+      sourced: {
+        buffer: g.buffer,
+        mimeType: g.mimeType,
+        ext: "png",
+        source: "ai_generated",
+        meta: { provider, prompt: description, ...(avoid.length ? { regeneratedFor: avoid } : {}) },
+        judge: judgeRecord,
+      },
+    };
+  }
+  return { ok: false, reason: "judge_rejected", detail: `${rejected.length}회`, candidatesTried: 2, rejected };
+}
+
+async function genImagen(prompt: string, key: string): Promise<GenResult> {
+  let r: Response;
   try {
-    const r = await fetch(
+    r = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(key)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instances: [{ prompt: aiPrompt(description, feedback) }],
-          parameters: { sampleCount: 1, aspectRatio: "16:9" },
-        }),
+        body: JSON.stringify({ instances: [{ prompt }], parameters: { sampleCount: 1, aspectRatio: "16:9" } }),
         cache: "no-store",
       }
     );
-    if (!r.ok) return null;
-    const data = (await r.json()) as {
-      predictions?: Array<{ bytesBase64Encoded?: string; mimeType?: string }>;
-    };
-    const b64 = data.predictions?.[0]?.bytesBase64Encoded;
-    if (!b64) return null;
-    return {
-      buffer: Buffer.from(b64, "base64"),
-      mimeType: data.predictions![0].mimeType || "image/png",
-      ext: "png",
-      source: "ai_generated",
-      meta: { provider: "imagen-3.0", prompt: description },
-    };
-  } catch {
-    return null;
+  } catch (err) {
+    return { ok: false, reason: "network_error", detail: errMsg(err) };
   }
+  if (!r.ok) {
+    // Google 은 잘못된 키를 400(API_KEY_INVALID)/403 으로 돌려준다.
+    if (r.status === 400) {
+      const t = await r.text().catch(() => "");
+      if (/API_KEY_INVALID|API key not valid/i.test(t)) return { ok: false, reason: "auth_error", detail: "400" };
+      return { ok: false, reason: "unknown", detail: "HTTP 400" };
+    }
+    return { ok: false, ...httpFailure(r.status) };
+  }
+  let data: { predictions?: Array<{ bytesBase64Encoded?: string; mimeType?: string; raiFilteredReason?: string }> };
+  try {
+    data = (await r.json()) as typeof data;
+  } catch {
+    return { ok: false, reason: "unknown", detail: "응답 파싱 실패" };
+  }
+  const p = data.predictions?.[0];
+  if (!p?.bytesBase64Encoded) {
+    if (p?.raiFilteredReason) return { ok: false, reason: "policy_blocked", detail: p.raiFilteredReason.slice(0, 60) };
+    return { ok: false, reason: "no_result" };
+  }
+  return { ok: true, buffer: Buffer.from(p.bytesBase64Encoded, "base64"), mimeType: p.mimeType || "image/png" };
 }
 
-async function genOpenAI(description: string, key: string, feedback?: string): Promise<Sourced | null> {
+async function genOpenAI(prompt: string, key: string): Promise<GenResult> {
   try {
     const client = new OpenAI({ apiKey: key });
     // gpt-image-1 은 항상 b64_json 반환(response_format 파라미터 없음).
-    const res = await client.images.generate({
-      model: "gpt-image-1",
-      prompt: aiPrompt(description, feedback),
-      size: "1536x1024",
-      n: 1,
-    });
+    const res = await client.images.generate({ model: "gpt-image-1", prompt, size: "1536x1024", n: 1 });
     const b64 = res.data?.[0]?.b64_json;
-    if (!b64) return null;
-    return {
-      buffer: Buffer.from(b64, "base64"),
-      mimeType: "image/png",
-      ext: "png",
-      source: "ai_generated",
-      meta: { provider: "gpt-image-1", prompt: description },
-    };
-  } catch {
-    return null;
+    if (!b64) return { ok: false, reason: "no_result" };
+    return { ok: true, buffer: Buffer.from(b64, "base64"), mimeType: "image/png" };
+  } catch (err) {
+    const status = (err as { status?: number })?.status;
+    const code = String((err as { code?: string })?.code ?? "");
+    const msg = errMsg(err);
+    if (/moderation_blocked|content_policy|safety/i.test(code + " " + msg)) return { ok: false, reason: "policy_blocked", detail: msg.slice(0, 60) };
+    if (status === 401 || status === 403) return { ok: false, reason: "auth_error", detail: `${status}` };
+    if (status === 429 || /insufficient_quota|billing/i.test(code + " " + msg)) return { ok: false, reason: "rate_limit", detail: status ? `${status}` : code };
+    if (msg.includes("fetch failed") || code === "ECONNRESET") return { ok: false, reason: "network_error", detail: msg.slice(0, 60) };
+    return { ok: false, reason: "unknown", detail: (status ? `HTTP ${status} ` : "") + msg.slice(0, 60) };
   }
 }
 
-function aiPrompt(description: string, feedback?: string): string {
+function aiPrompt(description: string, feedback?: string, avoid: string[] = []): string {
   const fb = feedback?.trim() ? ` Adjust per this feedback: ${feedback.trim()}.` : "";
-  return `${description}.${fb} Editorial blog photograph, photorealistic, natural lighting, high quality, no text, no watermark, no logo.`;
+  const av = avoid.length ? ` Avoid these problems found in a previous attempt: ${avoid.join("; ")}.` : "";
+  return `${description}.${fb}${av} Editorial blog photograph, photorealistic, natural lighting, high quality, no text, no watermark, no logo.`;
 }
 
-/** 시스템/유저 OpenAI 키 (AI 생성 폴백용) */
-async function resolveOpenAIKey(userId: string): Promise<string | null> {
-  const user = await db.query.users.findFirst({ where: eq(schema.users.id, userId) });
-  if (user?.apiKeyMode === "user_key" && user.openaiApiKey) {
-    try { return decryptApiKey(user.openaiApiKey); } catch { /* fall through */ }
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** 시도 내역 → 사용자용 한 줄 요약 ("Unsplash: 검색 결과 없음 → Pexels: 키 오류(401)") */
+export function describeAttempts(attempts: Attempt[]): string {
+  return attempts
+    .map((a) => {
+      const label = SOURCE_LABEL[a.source];
+      if (a.result === "adopted") return `${label}: 채택`;
+      const reason = FAIL_REASON_LABEL[a.reason ?? "unknown"];
+      return a.detail ? `${label}: ${reason}(${a.detail})` : `${label}: ${reason}`;
+    })
+    .join(" → ");
+}
+
+type SourceOutcome = { sourced: Sourced | null; attempts: Attempt[] };
+
+async function runGroup(
+  group: "stock" | "ai",
+  cfg: ImageSourceConfig,
+  judge: JudgeContext,
+  run: (source: ImageSource) => Promise<ProviderResult | { skip: FailReason }>
+): Promise<SourceOutcome> {
+  const attempts: Attempt[] = [];
+  const order: ImageSource[] = group === "stock" ? cfg.order.stock : cfg.order.ai;
+  for (const source of order) {
+    if (!cfg.enabled[source]) {
+      attempts.push({ source, result: "skipped", reason: "disabled" });
+      continue;
+    }
+    // 상한은 요청 단위 — 남은 소스도 심사할 수 없으니 호출하지 않고 불합격 처리.
+    if (judgeCapped(judge)) {
+      attempts.push({ source, result: "failed", reason: "judge_rejected", detail: "심사 상한 소진 — 시도 안 함", candidatesTried: 0, stop: "budget_cap" });
+      continue;
+    }
+    const r = await run(source);
+    if ("skip" in r) {
+      attempts.push({ source, result: "skipped", reason: r.skip });
+      continue;
+    }
+    if (r.ok) {
+      attempts.push({ source, result: "adopted", candidatesTried: r.candidatesTried, ...(r.rejected.length ? { rejected: r.rejected } : {}) });
+      return { sourced: r.sourced, attempts };
+    }
+    attempts.push({
+      source,
+      result: "failed",
+      reason: r.reason,
+      detail: r.detail,
+      candidatesTried: r.candidatesTried,
+      ...(r.stop ? { stop: r.stop } : {}),
+      ...(r.rejected?.length ? { rejected: r.rejected } : {}),
+    });
   }
-  const row = await db.query.settings.findFirst({
-    where: eq(schema.settings.key, "openai_api_key"),
-  });
-  if (!row) return null;
-  try { return JSON.parse(row.valueJson) as string | null; } catch { return null; }
+  return { sourced: null, attempts };
 }
 
-async function sourceByMode(mode: AutoMode, description: string, userId: string, feedback?: string): Promise<Sourced | { error: string }> {
-  const keys = await resolveImageKeys(userId);
+type SourceByModeResult =
+  | { ok: true; sourced: Sourced; attempts: Attempt[]; judge: JudgeContext; query?: string }
+  | { ok: false; error: string; attempts: Attempt[]; judge: JudgeContext; query?: string; needsUserShot?: boolean };
 
-  const tryStock = async (): Promise<Sourced | null> => {
-    if (!keys.unsplash && !keys.pexels) return null;
-    const query = await toEnglishQuery(description, userId, feedback);
-    if (keys.unsplash) {
-      const u = await searchUnsplash(query, keys.unsplash);
-      if (u) return u;
-    }
-    if (keys.pexels) {
-      const p = await searchPexels(query, keys.pexels);
-      if (p) return p;
-    }
-    return null;
+async function sourceByMode(mode: AutoMode, description: string, userId: string, feedback?: string): Promise<SourceByModeResult> {
+  const res = await resolveImageSources(userId);
+  const { keys, config } = res;
+  const judge = createJudgeContext({ ...config.verify, openaiKey: res.openai });
+
+  const stockOn = config.order.stock.filter((s) => config.enabled[s]);
+  const aiOn = config.order.ai.filter((s) => config.enabled[s]);
+
+  let query: string | undefined;
+  const runStock = async (): Promise<SourceOutcome> => {
+    const getQuery = async () => (query ??= await toEnglishQuery(description, userId, feedback));
+    return runGroup("stock", config, judge, async (source) => {
+      if (source === "unsplash") {
+        if (!keys.unsplash) return { skip: "no_key" };
+        return searchUnsplash(await getQuery(), keys.unsplash, description, judge);
+      }
+      if (!keys.pexels) return { skip: "no_key" };
+      return searchPexels(await getQuery(), keys.pexels, description, judge);
+    });
   };
 
-  const tryAi = async (): Promise<Sourced | null> => {
-    if (keys.googleAi) {
-      const g = await genImagen(description, keys.googleAi, feedback);
-      if (g) return g;
+  const runAi = async (): Promise<SourceOutcome> =>
+    runGroup("ai", config, judge, async (source) => {
+      if (source === "google_ai") {
+        const k = keys.googleAi;
+        if (!k) return { skip: "no_key" };
+        return generateWithJudge((p) => genImagen(p, k), "imagen-3.0", description, feedback, judge);
+      }
+      // openai_image: 글 생성용 OpenAI 키 공용. 토글이 꺼져 있으면 runGroup 에서 이미 건너뛴다.
+      const k = res.openai;
+      if (!k) return { skip: "no_key" };
+      return generateWithJudge((p) => genOpenAI(p, k), "gpt-image-1", description, feedback, judge);
+    });
+
+  const fail = (prefix: string, attempts: Attempt[]): SourceByModeResult => {
+    if (attempts.some((a) => a.stop === "budget_cap")) {
+      const n = attempts.reduce((sum, a) => sum + (a.rejected?.length ?? 0), 0);
+      return {
+        ok: false,
+        error: `심사 불합격(${n}장) — 묘사에 맞는 사진을 찾지 못했습니다. 직접 촬영해 올려주세요. (${describeAttempts(attempts)})`,
+        attempts,
+        judge,
+        query,
+        needsUserShot: true,
+      };
     }
-    const oa = await resolveOpenAIKey(userId);
-    if (oa) {
-      const o = await genOpenAI(description, oa, feedback);
-      if (o) return o;
-    }
-    return null;
+    return { ok: false, error: `${prefix} — ${describeAttempts(attempts)}`, attempts, judge, query };
   };
+  const success = (sourced: Sourced, attempts: Attempt[]): SourceByModeResult => ({ ok: true, sourced, attempts, judge, query });
 
   if (mode === "stock") {
-    if (!keys.unsplash && !keys.pexels)
-      return { error: "스톡 키(Unsplash/Pexels)가 설정에 없습니다." };
-    const r = await tryStock();
-    return r ?? { error: "적절한 스톡 이미지를 찾지 못했습니다. 다른 슬롯이거나 AI 생성을 써보세요." };
+    if (!stockOn.length)
+      return { ok: false, error: "사용 중인 스톡 소스가 없습니다(설정에서 Unsplash/Pexels를 켜세요).", attempts: [], judge };
+    const r = await runStock();
+    if (r.sourced) return success(r.sourced, r.attempts);
+    return fail("스톡 이미지를 가져오지 못했습니다", r.attempts);
   }
   if (mode === "ai") {
-    const r = await tryAi();
-    return r ?? { error: "AI 이미지 생성에 실패했습니다. 키(Google AI 또는 OpenAI)와 크레딧을 확인하세요." };
+    if (!aiOn.length)
+      return { ok: false, error: "사용 중인 AI 생성 소스가 없습니다(설정에서 Google Imagen/OpenAI gpt-image-1을 켜세요).", attempts: [], judge };
+    const r = await runAi();
+    if (r.sourced) return success(r.sourced, r.attempts);
+    return fail("AI 이미지 생성에 실패했습니다", r.attempts);
   }
   // stock_then_ai
-  const s = await tryStock();
-  if (s) return s;
-  const a = await tryAi();
-  return a ?? { error: "스톡·AI 모두 실패했습니다. 키 설정과 크레딧을 확인하세요." };
+  if (!stockOn.length && !aiOn.length)
+    return { ok: false, error: "사용 중인 이미지 소스가 없습니다(설정에서 스톡 또는 AI 소스를 켜세요).", attempts: [], judge };
+  const s = await runStock();
+  if (s.sourced) return success(s.sourced, s.attempts);
+  const a = await runAi();
+  const attempts = [...s.attempts, ...a.attempts];
+  if (a.sourced) return success(a.sourced, attempts);
+  return fail("스톡·AI 모두 실패했습니다", attempts);
 }
+
+export type AutoSourceResult =
+  | { ok: true; provider: string; imageUrl: string; judge: JudgeRecord; attempts: Attempt[] }
+  | { ok: false; error: string; attempts: Attempt[]; needsUserShot?: boolean };
 
 /**
  * 사진 요청 1건을 자동 소싱해 저장하고 요청을 uploaded로 갱신한다.
@@ -238,15 +497,36 @@ export async function autoSourceForRequest(opts: {
   mode: AutoMode;
   userId: string;
   feedback?: string;
-}): Promise<{ ok: true; provider: string; imageUrl: string } | { ok: false; error: string }> {
+}): Promise<AutoSourceResult> {
   const req = await db.query.imageRequests.findFirst({
     where: eq(schema.imageRequests.id, opts.requestId),
     with: { draft: true },
   });
-  if (!req) return { ok: false, error: "요청을 찾을 수 없습니다." };
+  if (!req) return { ok: false, error: "요청을 찾을 수 없습니다.", attempts: [] };
 
-  const sourced = await sourceByMode(opts.mode, req.description, opts.userId, opts.feedback);
-  if ("error" in sourced) return { ok: false, error: sourced.error };
+  const result = await sourceByMode(opts.mode, req.description, opts.userId, opts.feedback);
+  const judgeSummary = {
+    model: result.judge.model,
+    calls: result.judge.calls,
+    usage: result.judge.usage,
+    estCostUsd: Number(estimateJudgeCostUsd(result.judge.usage).toFixed(5)),
+  };
+  console.log(
+    "[image-sourcing]",
+    JSON.stringify({
+      requestId: opts.requestId,
+      mode: opts.mode,
+      ok: result.ok,
+      query: result.query,
+      ...(result.ok
+        ? { provider: result.sourced.meta.provider, judge: result.sourced.judge }
+        : { error: result.error, ...(result.needsUserShot ? { stop: "budget_cap", needsUserShot: true } : {}) }),
+      attempts: result.attempts,
+      judgeCalls: judgeSummary,
+    })
+  );
+  if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts, needsUserShot: result.needsUserShot };
+  const { sourced, attempts } = result;
 
   const { urlPath, size } = await saveImageBuffer(sourced.buffer, sourced.ext);
 
@@ -263,6 +543,9 @@ export async function autoSourceForRequest(opts: {
         slot: req.slot,
         ...sourced.meta,
         ...(opts.feedback?.trim() ? { feedback: opts.feedback.trim() } : {}),
+        attempts,
+        judge: sourced.judge,
+        judgeCalls: judgeSummary,
       }),
     })
     .returning();
@@ -287,5 +570,11 @@ export async function autoSourceForRequest(opts: {
     }
   }
 
-  return { ok: true, provider: String(sourced.meta.provider ?? sourced.source), imageUrl: img.filePath };
+  return {
+    ok: true,
+    provider: String(sourced.meta.provider ?? sourced.source),
+    imageUrl: img.filePath,
+    judge: sourced.judge,
+    attempts,
+  };
 }

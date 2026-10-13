@@ -7,7 +7,7 @@ import { DraftStatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { DraftReview } from "@/components/draft-review";
 import { GeneratingView } from "./GeneratingView";
-import { scoreHuman, scoreSeo } from "@/lib/scoring";
+import { parseReviewInfo } from "@/lib/review-info";
 import { relativeTime } from "@/lib/utils";
 import { getAccessibleDraft, requireUser } from "@/lib/auth";
 import {
@@ -106,7 +106,6 @@ export default async function DraftDetailPage({
     );
   }
 
-  const persona = draft.blog.personas.find((p) => p.isActive) ?? draft.blog.personas[0];
   const imagePlan = JSON.parse(draft.imagePlanJson) as Array<{
     slot: number;
     role: string;
@@ -133,23 +132,7 @@ export default async function DraftDetailPage({
     }
   }
 
-  const seo = scoreSeo({
-    title: draft.title,
-    bodyMd: draft.bodyMd,
-    primaryKeyword: persona
-      ? JSON.parse(persona.focusKeywordsJson)[0] ?? ""
-      : "",
-    secondaryKeywords: persona
-      ? JSON.parse(persona.focusKeywordsJson).slice(1)
-      : [],
-    imageCount: imagePlan.length,
-    minLen: persona?.preferredLengthMin ?? 1500,
-    maxLen: persona?.preferredLengthMax ?? 2800,
-  });
-  const human = scoreHuman({
-    bodyMd: draft.bodyMd,
-    forbiddenWords: persona ? JSON.parse(persona.forbiddenWordsJson) : [],
-  });
+  const review = parseReviewInfo(draft);
 
   return (
     <div className="px-5 lg:px-10 py-8 lg:py-10 max-w-7xl mx-auto">
@@ -218,8 +201,7 @@ export default async function DraftDetailPage({
         initialSummary={draft.summary ?? ""}
         imagePlan={imagePlan}
         imageUrls={imageUrls}
-        seo={seo}
-        human={human}
+        review={review}
         naverBlogId={draft.blog.naverBlogId}
         blogName={draft.blog.displayName}
         status={draft.status}

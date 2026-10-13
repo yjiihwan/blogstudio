@@ -1,14 +1,14 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getAccountInfo, getTelegramLinkInfo } from "./actions";
+import { getAccountInfo, getNotifyInfo } from "./actions";
 import { PasswordForm } from "./password-form";
 import { EmailForm } from "./email-form";
-import { TelegramForm } from "./telegram-form";
+import { NotifyForm } from "./notify-form";
 
 export default async function AccountPage() {
-  const [info, telegramInfo] = await Promise.all([
+  const [info, notifyInfo] = await Promise.all([
     getAccountInfo(),
-    getTelegramLinkInfo(),
+    getNotifyInfo(),
   ]);
 
   const joinDate = new Date(info.createdAt).toLocaleDateString("ko-KR", {
@@ -77,17 +77,11 @@ export default async function AccountPage() {
 
         <Card>
           <CardContent>
-            <h2 className="font-bold text-base mb-1">텔레그램 알림</h2>
+            <h2 className="font-bold text-base mb-1">알림 (카카오 알림톡)</h2>
             <p className="text-sm text-ink-600 leading-relaxed mb-4">
-              초안 생성, 게시물 발행, 계정 승인 등의 이벤트를 텔레그램으로 받습니다.
-              버튼 한 번으로 본인 계정에 연결할 수 있습니다.
+              계정 승인, 게시물 발행 등의 알림을 카카오 알림톡으로 받습니다. 휴대폰 번호를 저장하고 «알림 받기»를 켜 두세요.
             </p>
-            <TelegramForm
-              connected={telegramInfo.connected}
-              chatId={telegramInfo.chatId}
-              botTokenSet={telegramInfo.botTokenSet}
-              botUsername={telegramInfo.botUsername}
-            />
+            <NotifyForm info={notifyInfo} />
           </CardContent>
         </Card>
       </div>

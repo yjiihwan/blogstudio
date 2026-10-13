@@ -7,6 +7,8 @@ import { PersonaEditor } from "@/components/persona-editor";
 import { updateBlogAction } from "../actions";
 import { Badge } from "@/components/ui/badge";
 import { getAccessibleBlog, requireUser } from "@/lib/auth";
+import { latestAppliedForBlog } from "@/lib/proposals";
+import { fieldLabel } from "@/lib/proposals-core";
 
 export default async function BlogEditPage({
   params,
@@ -27,6 +29,7 @@ export default async function BlogEditPage({
   if (!blog) notFound();
   const persona = blog.personas.find((p) => p.isActive) ?? blog.personas[0];
   const sched = blog.schedules[0];
+  const appliedProposal = await latestAppliedForBlog(blog.id).catch(() => null);
 
   return (
     <div className="px-5 lg:px-10 py-8 lg:py-12 max-w-3xl mx-auto">
@@ -68,6 +71,18 @@ export default async function BlogEditPage({
         <div className="mb-5 rounded-lg bg-leaf-100 border border-leaf-500/20 px-3 py-2 text-sm text-leaf-500 flex items-center gap-2">
           <CheckCircle2 className="size-4" />
           저장됐습니다.
+        </div>
+      )}
+
+      {appliedProposal && persona && (
+        <div className="mb-5 rounded-lg bg-sky-100 border border-sky-500/20 px-3 py-2 text-sm text-sky-700 flex flex-wrap items-center gap-2" data-testid="persona-applied-banner">
+          <span>
+            개선 제안으로 «{fieldLabel("persona", appliedProposal.field)}» 설정이 변경됨
+            {appliedProposal.appliedAt ? ` (${new Date(appliedProposal.appliedAt).toLocaleDateString("ko-KR")}, v${persona.version})` : ""}
+          </span>
+          <Link href={`/proposals/${appliedProposal.id}`} className="font-semibold underline underline-offset-4">
+            제안 보기 · 되돌리기
+          </Link>
         </div>
       )}
 

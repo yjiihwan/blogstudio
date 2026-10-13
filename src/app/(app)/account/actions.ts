@@ -6,6 +6,9 @@ import { requireUser, hashPassword, verifyPassword } from "@/lib/auth";
 import { eq } from "drizzle-orm";
 import { TELEGRAM_TOKEN_KEY } from "@/lib/telegram";
 import { issueLinkCode, getBotUsername } from "@/lib/telegram-link";
+import { maskPhone, normalizePhone, phoneLabel } from "@/lib/notify/alimtalk-core";
+import { resolveAlimtalk } from "@/lib/notify/alimtalk-config";
+import { sendTestTo } from "@/lib/notify/notify";
 
 export async function getAccountInfo() {
   const user = await requireUser();
@@ -220,4 +223,61 @@ export async function testTelegramAccountAction(): Promise<{
       message: `연결 실패: ${err instanceof Error ? err.message.slice(0, 60) : String(err)}`,
     };
   }
+}
+
+/* ───────── 카카오 알림톡 수신 설정(2026-10-13, 텔레그램 연결 폼 대체) ───────── */
+export type NotifyInfo = {
+  phone: string | null; // 010-1234-5678 표기
+  phoneMasked: string | null;
+  enabled: boolean;
+  setupComplete: boolean; // 관리자 연동 4칸 전부 완료(실발송 상태)
+  setupReason: string;
+  isAdmin: boolean;
+};
+export async function getNotifyInfo(): Promise<NotifyInfo> {
+  const user = await requireUser();
+  const r = await resolveAlimtalk();
+  return {
+    phone: user.phone ? phoneLabel(user.phone) : null,
+    phoneMasked: user.phone ? maskPhone(user.phone) : null,
+    enabled: user.notifyEnabled !== false,
+    setupComplete: r.mode.mode === "live",
+    setupReason: r.mode.mode === "dryrun" ? r.mode.reason : "",
+    isAdmin: user.role === "admin",
+  };
+}
+
+export async function savePhoneAction(formData: FormData): Promise<{ ok: true; phone: string } | { ok: false; error: string }> {
+  const user = await requireUser();
+  const raw = String(formData.get("phone") ?? "").trim();
+  if (!raw) {
+    await db.update(schema.users).set({ phone: null, updatedAt: new Date().toISOString() }).where(eq(schema.users.id, user.id));
+    revalidatePath("/account");
+    return { ok: true, phone: "" };
+  }
+  const phone = normalizePhone(raw);
+  if (!phone) return { ok: false, error: "휴대폰 번호 형식이 아닙니다. 예) 010-1234-5678 (알림톡은 휴대폰 번호로만 받을 수 있습니다)" };
+  await db.update(schema.users).set({ phone, updatedAt: new Date().toISOString() }).where(eq(schema.users.id, user.id));
+  revalidatePath("/account");
+  revalidatePath("/settings");
+  return { ok: true, phone: phoneLabel(phone) };
+}
+
+export async function toggleNotifyAction(enabled: boolean): Promise<{ ok: true; enabled: boolean }> {
+  const user = await requireUser();
+  await db.update(schema.users).set({ notifyEnabled: enabled, updatedAt: new Date().toISOString() }).where(eq(schema.users.id, user.id));
+  revalidatePath("/account");
+  return { ok: true, enabled };
+}
+
+export async function sendTestNotifyAction(): Promise<{ ok: boolean; message: string }> {
+  const user = await requireUser();
+  if (!user.phone) return { ok: false, message: "휴대폰 번호를 먼저 저장해 주세요." };
+  const r = await resolveAlimtalk();
+  if (r.mode.mode !== "live") return { ok: false, message: "관리자가 알림톡 연동을 아직 완료하지 않았습니다. 연동이 끝나면 이 버튼으로 테스트할 수 있습니다." };
+  const out = await sendTestTo(user.id);
+  revalidatePath("/settings");
+  if (out.status === "sent") return { ok: true, message: `${maskPhone(user.phone)} 로 테스트 알림톡을 보냈습니다. 카카오톡을 확인해 주세요.` };
+  if (out.status === "sms_sent") return { ok: true, message: `알림톡 대신 문자로 보냈습니다(${maskPhone(user.phone)}).` };
+  return { ok: false, message: `발송 실패: ${out.message}` };
 }

@@ -10,10 +10,10 @@ import { Card, CardContent } from "@/components/ui/card";
 export default async function SignupPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; name?: string; email?: string }>;
+  searchParams: Promise<{ error?: string; name?: string; email?: string; phone?: string }>;
 }) {
   if (await getSession()) redirect("/dashboard");
-  const { error, name, email } = await searchParams;
+  const { error, name, email, phone } = await searchParams;
 
   return (
     <div className="min-h-screen bg-paper-100 paper-texture flex items-center justify-center px-6 py-16">
@@ -56,6 +56,21 @@ export default async function SignupPage({
                   required
                   placeholder="name@example.com"
                 />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="phone">
+                  휴대폰 번호 <span className="normal-case tracking-normal text-ink-400 font-normal">(선택)</span>
+                </Label>
+                <Input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  inputMode="tel"
+                  defaultValue={phone ?? ""}
+                  autoComplete="tel"
+                  placeholder="010-1234-5678"
+                />
+                <p className="text-xs text-ink-500">승인 결과를 카카오 알림톡으로 받으려면 입력해 주세요. 가입 후 «내 계정»에서도 등록할 수 있습니다.</p>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="password">비밀번호</Label>

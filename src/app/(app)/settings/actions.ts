@@ -9,6 +9,12 @@ import { eq } from "drizzle-orm";
 import { decryptApiKey, maskApiKey, tryEncryptApiKey } from "@/lib/crypto";
 import { env } from "@/lib/env";
 import { ensureWebhookSecret, clearBotUsernameCache } from "@/lib/telegram-link";
+import {
+  IMAGE_SOURCE_CONFIG_SETTING_KEY,
+  normalizeImageSourceConfig,
+  type ImageSourceConfig,
+} from "@/lib/image-source-config";
+import { getSystemImageSourceConfig, resolveOpenAIKey } from "@/lib/image-keys";
 
 const SETTINGS_ANTHROPIC_KEY = "anthropic_api_key";
 const SETTINGS_OPENAI_KEY = "openai_api_key";
@@ -193,11 +199,13 @@ export async function getGlobalGuideForAdmin(): Promise<{
 export async function saveGlobalGuideAction(
   formData: FormData
 ): Promise<{ ok: boolean; error?: string }> {
-  await requireAdmin();
-  const { GLOBAL_GUIDE_KEY } = await import("@/lib/global-guide");
+  const me = await requireAdmin();
+  const { GLOBAL_GUIDE_KEY, replaceGlobalGuideText } = await import("@/lib/global-guide");
   const enabledRaw = String(formData.get("enabled") ?? "");
   const enabled = enabledRaw === "on" || enabledRaw === "true";
   const text = String(formData.get("text") ?? "").trim();
+  // 본문이 바뀌면 직전 전문을 이력에 보관(개선 제안 적용과 같은 경로) → 되돌리기 가능.
+  await replaceGlobalGuideText(text, "직접 편집", { byUserId: me.id });
   await db
     .insert(schema.settings)
     .values({ key: GLOBAL_GUIDE_KEY, valueJson: JSON.stringify({ enabled, text }) })
@@ -210,6 +218,34 @@ export async function saveGlobalGuideAction(
     });
   revalidatePath("/settings");
   return { ok: true };
+}
+
+export type GuideHistoryView = { index: number; at: string; reason: string; chars: number; preview: string; text: string };
+
+export async function getGuideHistoryForAdmin(): Promise<GuideHistoryView[]> {
+  await requireAdmin();
+  const { getGuideHistory } = await import("@/lib/global-guide");
+  const h = await getGuideHistory();
+  return h.map((e, index) => ({
+    index,
+    at: e.at,
+    reason: e.reason,
+    chars: e.text.length,
+    preview: e.text.replace(/\s+/g, " ").slice(0, 80),
+    text: e.text,
+  }));
+}
+
+/** 이력의 특정 버전으로 되돌리기 — 현재 전문은 이력 맨 앞에 «되돌리기 전» 으로 보관된다. */
+export async function restoreGuideVersionAction(index: number): Promise<{ ok: boolean; error?: string; text?: string }> {
+  const me = await requireAdmin();
+  const { getGuideHistory, replaceGlobalGuideText } = await import("@/lib/global-guide");
+  const h = await getGuideHistory();
+  const entry = h[index];
+  if (!entry) return { ok: false, error: "해당 이력을 찾을 수 없습니다." };
+  await replaceGlobalGuideText(entry.text, `이력에서 되돌리기(${new Date(entry.at).toLocaleString("ko-KR")} 버전)`, { byUserId: me.id });
+  revalidatePath("/settings");
+  return { ok: true, text: entry.text };
 }
 
 // ── Unsplash ──────────────────────────────────────────────────────────────────
@@ -750,4 +786,61 @@ export async function testUserGoogleAiKeyAction(): Promise<{ ok: boolean; messag
   } catch (err) {
     return { ok: false, message: `연결 실패: ${err instanceof Error ? err.message.slice(0, 60) : String(err)}` };
   }
+}
+
+// ── 이미지 소스 사용여부·시도순서·자동검증 설정 ─────────────────────────────
+
+export async function getImageSourceConfigInfo(): Promise<{
+  system: ImageSourceConfig;
+  user: ImageSourceConfig;
+  /** 시스템 OpenAI 키 존재 여부(시스템 카드의 gpt-image-1·심사 가능 여부 표시용) */
+  systemOpenAIKeyPresent: boolean;
+  /** 현재 계정 기준 OpenAI 키 존재 여부(유저 키 모드면 개인 키, 아니면 시스템 키) */
+  userOpenAIKeyPresent: boolean;
+}> {
+  const user = await requireUser();
+  const [system, systemOpenAI, userOpenAI] = await Promise.all([
+    getSystemImageSourceConfig(),
+    resolveSystemApiKey("openai"),
+    resolveOpenAIKey(user.id),
+  ]);
+  return {
+    system,
+    user: normalizeImageSourceConfig(user.imageSourceConfigJson),
+    systemOpenAIKeyPresent: !!systemOpenAI,
+    userOpenAIKeyPresent: !!userOpenAI,
+  };
+}
+
+export async function saveImageSourceConfigAction(
+  raw: unknown
+): Promise<{ ok: true; config: ImageSourceConfig } | { ok: false; error: string }> {
+  await requireAdmin();
+  const config = normalizeImageSourceConfig(raw);
+  const valueJson = JSON.stringify(config);
+  await db
+    .insert(schema.settings)
+    .values({ key: IMAGE_SOURCE_CONFIG_SETTING_KEY, valueJson })
+    .onConflictDoUpdate({
+      target: schema.settings.key,
+      set: { valueJson, updatedAt: new Date().toISOString() },
+    });
+  revalidatePath("/settings");
+  return { ok: true, config };
+}
+
+export async function saveUserImageSourceConfigAction(
+  raw: unknown
+): Promise<{ ok: true; config: ImageSourceConfig } | { ok: false; error: string }> {
+  const user = await requireUser();
+  if ((user.imageApiKeyMode ?? "system") !== "user_key") {
+    return { ok: false, error: "이미지 키 모드가 유저 키 모드가 아닙니다." };
+  }
+  const config = normalizeImageSourceConfig(raw);
+  await db
+    .update(schema.users)
+    .set({ imageSourceConfigJson: JSON.stringify(config), updatedAt: new Date().toISOString() })
+    .where(eq(schema.users.id, user.id));
+  revalidatePath("/settings");
+  return { ok: true, config };
 }

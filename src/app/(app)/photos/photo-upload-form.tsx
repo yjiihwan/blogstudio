@@ -4,6 +4,8 @@ import { useActionState, useRef, useState, useTransition } from "react";
 import { Camera, CheckCircle2, Loader2, Sparkles, ImageIcon, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { uploadPhotoAction, skipPhotoAction, autoSourcePhotoAction } from "./actions";
+import { JudgeBadge } from "@/components/judge-badge";
+import type { Attempt, JudgeRecord } from "@/lib/image-sourcing";
 
 type AutoMode = "stock" | "ai" | "stock_then_ai";
 const MODE_LABEL: Record<AutoMode, string> = {
@@ -19,7 +21,10 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
   // 자동 소싱 상태
   const [autoUrl, setAutoUrl] = useState<string | null>(null);
   const [autoProvider, setAutoProvider] = useState<string | null>(null);
+  const [autoJudge, setAutoJudge] = useState<JudgeRecord | null>(null);
+  const [autoAttempts, setAutoAttempts] = useState<Attempt[]>([]);
   const [autoErr, setAutoErr] = useState<string | null>(null);
+  const [needsShot, setNeedsShot] = useState(false);
   const [autoPending, startAuto] = useTransition();
   const [busyMode, setBusyMode] = useState<AutoMode | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -28,6 +33,7 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
 
   function runAuto(mode: AutoMode, fb?: string) {
     setAutoErr(null);
+    setNeedsShot(false);
     setBusyMode(mode);
     startAuto(async () => {
       const res = await autoSourcePhotoAction(requestId, mode, fb);
@@ -35,10 +41,13 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
       if (res.ok && res.imageUrl) {
         setAutoUrl(res.imageUrl + `?t=${Date.now()}`);
         setAutoProvider(res.provider ?? null);
+        setAutoJudge(res.judge ?? null);
+        setAutoAttempts(res.attempts ?? []);
         setShowFeedback(false);
         setFeedback("");
       } else {
         setAutoErr(res.error ?? "실패했습니다.");
+        setNeedsShot(!!res.needsUserShot);
       }
     });
   }
@@ -62,12 +71,13 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
           alt="자동 생성 이미지"
           className="w-full h-44 object-cover rounded-lg border border-paper-300"
         />
-        <p className="text-[11px] text-ink-400 text-center">
-          {autoProvider ? `출처: ${autoProvider}` : ""}
-          {feedback ? "" : ""}
-        </p>
+        <div className="flex items-center justify-center gap-2 flex-wrap text-[11px] text-ink-400">
+          {autoProvider ? <span>출처: {autoProvider}</span> : null}
+          <JudgeBadge judge={autoJudge} attempts={autoAttempts} />
+        </div>
 
         {autoErr && <p className="text-xs text-red-500 text-center">{autoErr}</p>}
+        {needsShot && <UserShotNotice />}
 
         {!showFeedback ? (
           <div className="flex gap-2">
@@ -199,10 +209,23 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
           스톡=Unsplash/Pexels 검색 · AI=이미지 생성 · 스톡→AI=스톡 먼저, 없으면 AI
         </p>
         {autoErr && <p className="text-xs text-red-500 mt-1.5">{autoErr}</p>}
+        {needsShot && <UserShotNotice />}
       </div>
 
       <SkipForm requestId={requestId} />
     </>
+  );
+}
+
+/** 자동 심사에서 끝내 맞는 사진을 못 찾은 경우 — 이 슬롯은 직접 촬영 대상으로 남는다. */
+function UserShotNotice() {
+  return (
+    <div className="mt-1.5 flex items-start gap-1.5 rounded-md bg-accent-100 px-2 py-1.5 text-[11px] text-accent-700">
+      <Camera className="size-3.5 shrink-0 mt-px" />
+      <span>
+        <b>직접 촬영 필요</b> — 스톡·AI 사진으로는 이 묘사를 채울 수 없습니다. «사진 촬영·직접 업로드»로 올려주세요.
+      </span>
+    </div>
   );
 }
 

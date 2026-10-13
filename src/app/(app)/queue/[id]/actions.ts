@@ -18,7 +18,7 @@ import {
   ApiKeyUndecryptableError,
   SystemApiKeyMissingError,
 } from "@/lib/llm";
-import { sendTelegramToUser } from "@/lib/telegram";
+import { notifyUser } from "@/lib/notify/notify";
 import { runPublish } from "@/lib/publish/adapter";
 
 // LLM 호출 실패를 사용자에게 보여줄 친절한 메시지로 변환한다.
@@ -130,16 +130,15 @@ export async function markPublishedAction(formData: FormData) {
   const draft = await getAccessibleDraft(id, user);
   if (!draft) return;
 
-  // 외부 부작용(텔레그램 알림 등)은 발행 어댑터 게이트를 통해서만 내보낸다.
-  // staging/dry-run이면 notify()는 호출되지 않고 모의발행 로그만 남는다.
+  // 외부 부작용(알림톡)은 발행 어댑터 게이트를 통해서만 내보낸다.
+  // staging/dry-run이면 notify({dryRun:true}) → 알림톡 모듈이 «드라이런(기록만)»으로 이력만 남긴다
+  // (테스트서버 모의 응답 모드일 때만 모의 발송까지 진행). 실패해도 발행 흐름은 막지 않는다.
   const outcome = await runPublish(
     { draftId: id, title: draft.title, userId: user.id },
     {
-      notify: () =>
-        sendTelegramToUser(
-          user.id,
-          `🎉 게시물이 발행되었습니다!\n제목: ${draft.title}`
-        ),
+      notify: async ({ dryRun }) => {
+        await notifyUser(user.id, "publish_done", { 제목: draft.title }, { publishDryRun: dryRun });
+      },
     }
   );
 

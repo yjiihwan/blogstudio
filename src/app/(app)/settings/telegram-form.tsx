@@ -1,4 +1,5 @@
 "use client";
+// ⚠️ 10-13 알림톡 전환으로 미사용 — 화면·호출처에서 제거됨. 되돌리기용으로 파일·users.telegram_* 컬럼은 유지(src/lib/notify/* 참고).
 
 import { useState, useTransition } from "react";
 import { Eye, EyeOff, Loader2 } from "lucide-react";

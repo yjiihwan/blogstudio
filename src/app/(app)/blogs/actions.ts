@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db/client";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getAccessibleBlog, requireUser } from "@/lib/auth";
 import { normalizeCategory } from "@/lib/style-samples-core";
 
@@ -153,10 +153,15 @@ export async function updateBlogAction(formData: FormData) {
     .set({ ...blog, updatedAt: new Date().toISOString() })
     .where(eq(schema.blogs.id, id));
 
-  // Update active persona (single row)
-  const existing = await db.query.personas.findFirst({
-    where: eq(schema.personas.blogId, id),
-  });
+  // 활성 페르소나 행만 갱신. WHY: 개선 제안 적용이 version+1 새 행을 만들고 옛 행을 비활성으로 두므로,
+  // blogId 로 아무 행이나 잡으면 비활성 옛 버전을 고치는 사고가 난다.
+  const existing =
+    (await db.query.personas.findFirst({
+      where: and(eq(schema.personas.blogId, id), eq(schema.personas.isActive, true)),
+    })) ??
+    (await db.query.personas.findFirst({
+      where: eq(schema.personas.blogId, id),
+    }));
   const newPersona = {
     blogId: id,
     purpose: persona.purpose,

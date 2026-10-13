@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `image_source_config_json` text;

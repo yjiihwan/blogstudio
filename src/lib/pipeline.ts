@@ -20,44 +20,37 @@ import {
   findAbsentFacilityHits,
   findForbiddenTopicHits,
   buildGroundingText,
-  findFabricationHits,
   factGuardPrompt,
   assessInsufficiency,
   assessSupplementProgress,
-  isLengthUnfillable,
   limitationNotice,
-  buildAugmentationRequest,
   augmentedPreamble,
   resolveEmojiIntensity,
   type EmojiIntensity,
   resolveWritingTemplate,
-  reviewChecklist,
-  reviewRubricPrompt,
-  reviewRewritePrompt,
-  deriveSpeakerPersona,
   applyBriefSpeaker,
   type BriefSpeaker,
   topicNeedsDomainMaterial,
   domainMaterialPrompt,
   filterDomainMaterial,
-  REVIEW_V1,
-  countSlotPlaceholders,
 } from "./llm/prompts";
-import { scoreHuman, scoreSeo } from "./scoring";
 import { sanitizeBody } from "./markdown";
+import { runModelReview } from "./review";
+import { VERDICT_LABEL } from "./review-core";
+import { recordSettingIssues } from "./proposals";
+import { styleSampleBlock } from "./style-samples";
 import { sendTelegramToUser } from "./telegram";
 import { globalGuideBlock, getGlobalWritingGuide } from "./global-guide";
 import {
   loadStyleMetricsDirective,
   loadStyleSamples,
-  styleSampleBlock,
 } from "./style-samples";
 import { saveImageBuffer } from "./storage";
 
 /**
  * 본문 생성 후 'AI 티'를 걷어내는 사람화 리라이트 패스.
- * 전역 가이드가 켜져 있을 때만 동작. 결과가 비정상(너무 짧거나 이미지 마커 유실)이면
- * 원본을 유지한다. 토큰/비용 델타를 반환한다.
+ * 전역 가이드가 켜져 있을 때만 동작. 사진 자리 마커를 잃거나 빈 응답이면 원본을 유지한다(사고 방지용 구조 체크).
+ * 분량 기준(«절반 이하면 원본 유지») 같은 기계 규칙은 2026-10-13 A안으로 제거 — 품질 판단은 모델 검수가 한다.
  */
 async function humanizeBody(opts: {
   bodyMd: string;
@@ -67,8 +60,6 @@ async function humanizeBody(opts: {
   model: string;
   brandName?: string;
   primaryKeyword?: string;
-  /** 분량 늘리기 반려 직후 호출 시, 결과가 이 글자수(공백 제외) 미만이면 humanize를 버리고 입력을 유지한다. */
-  minChars?: number;
   /** 큰 본문은 기본 4096토큰에서 잘리므로 호출부가 천장을 올려 전달한다. */
   maxTokens?: number;
   /** 실효 이모지 레벨(0~3) — anti-ai 이모지 판정을 레벨 인지로 전환(§5). */
@@ -92,7 +83,6 @@ async function humanizeBody(opts: {
             rules: guide.text,
             brandName: opts.brandName,
             primaryKeyword: opts.primaryKeyword,
-            minChars: opts.minChars,
             emojiLevel: opts.emojiLevel,
           }),
         },
@@ -105,12 +95,8 @@ async function humanizeBody(opts: {
       .trim();
     const origImgs = (opts.bodyMd.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
     const newImgs = (out.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
-    // 안전장치: 결과가 절반 미만이거나 이미지 마커를 잃으면 원본 유지(토큰은 정산).
-    // 분량 늘리기 반려(minChars)면 humanize가 길이를 깎는 걸 막기 위해 floor를 minChars의 95%로 올린다.
-    const outChars = out.replace(/\s+/g, "").length;
-    const floor = opts.minChars ? opts.minChars * 0.95 : opts.bodyMd.length * 0.5;
-    const measured = opts.minChars ? outChars : out.length;
-    if (measured < floor || newImgs < origImgs) {
+    // 안전장치(구조 체크만): 사진 자리 마커를 잃거나 사실상 빈 응답이면 원본 유지(토큰은 정산).
+    if (out.length < 50 || newImgs < origImgs) {
       return { bodyMd: opts.bodyMd, inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
     }
     return { bodyMd: out, inTokens: res.inputTokens, outTokens: res.outputTokens, costCents: res.costCents };
@@ -123,7 +109,7 @@ async function humanizeBody(opts: {
  * 발행 전 사실검증(fact-guard) 리라이트 패스 — 업종 무관 '완전 차단' 층.
  * 확정 사실(grounding)로 뒷받침되지 않는 구체 주장(가격·수치·할인·연혁·수상·규모·시설·이벤트)을
  * LLM이 걷어낸(또는 일반화한) 본문을 돌려준다. 전역 가이드가 켜져 있을 때만, mock 제외.
- * 안전장치는 humanize와 동일 — 이미지 마커 유실/과도 축소면 원본 유지(토큰만 정산).
+ * 안전장치는 humanize와 동일 — 이미지 마커 유실/빈 응답이면 원본 유지(토큰만 정산).
  */
 async function factGuardBody(opts: {
   bodyMd: string;
@@ -193,13 +179,11 @@ async function factGuardBody(opts: {
           .trim();
         const origImgs = (cur.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
         const newImgs = (out.match(/<!--\s*IMG:slot=\d+\s*-->/g) || []).length;
-        const outChars = out.replace(/\s+/g, "").length;
-        const origChars = cur.replace(/\s+/g, "").length;
         if (Array.isArray(parsed.removed)) {
           removedAll.push(...parsed.removed.filter((s) => typeof s === "string"));
         }
-        // 이미지 마커 유실·과도 축소·빈 응답이 아니면 채택(제거 목록은 감사용으로 항상 보존).
-        if (!(newImgs < origImgs || outChars < origChars * 0.5 || out.length < 50)) {
+        // 이미지 마커 유실·빈 응답이 아니면 채택(제거 목록은 감사용으로 항상 보존).
+        if (!(newImgs < origImgs || out.length < 50)) {
           cur = out;
         }
       }
@@ -214,289 +198,65 @@ async function factGuardBody(opts: {
   return { bodyMd: cur, removed: removedAll, forbiddenHits, inTokens, outTokens, costCents };
 }
 
-const IMG_MARKER_RE = /<!--\s*IMG:slot=\d+\s*-->/g;
-
 /**
- * 개정 가이드 자가검증 게이트(review_v1 전용). §4 결정론 체크리스트 + §7 LLM 루브릭으로
- * '사람다움'을 검사하고, 미충족(필수요소 미달 또는 루브릭 7점 미만)이면 한 번 재작성한다.
- * standard 템플릿·mock·가이드 비활성이면 통과(원본 유지). 이미지 마커 유실/과도 축소면 원본 유지.
- * 결과 issues 는 seoIssues 에 얹혀 검수자에게 노출된다.
+ * 모델 검수 단계(A안) — 생성 끝에서 글 전체를 검수 모델에 맡기고(revise 최대 1회), 판정·사유·플래그를 돌려준다.
+ * 검수 모델이 보고한 설정 결함(setting_issues)은 개선 제안으로 기록한다(알림은 proposals.ts 공통 경로).
  */
-async function reviewVerifyPass(opts: {
+async function reviewStage(opts: {
   persona: PersonaInput;
-  bodyMd: string;
   title: string;
-  preamble: string;
-  callerUserId?: string;
-  model: string;
-  maxTokens?: number;
-  primaryKeyword?: string;
-  minChars?: number;
-}): Promise<{
   bodyMd: string;
-  rubricScore: number | null;
-  issues: string[];
-  rewritten: boolean;
-  inTokens: number;
-  outTokens: number;
-  costCents: number;
-}> {
-  const passthrough = {
-    bodyMd: opts.bodyMd,
-    rubricScore: null as number | null,
-    issues: [] as string[],
-    rewritten: false,
-    inTokens: 0,
-    outTokens: 0,
-    costCents: 0,
-  };
-  if (resolveWritingTemplate(opts.persona) !== "review_v1") return passthrough;
-  if (opts.model === "mock") return passthrough;
-  const guide = await getGlobalWritingGuide();
-  if (!guide.enabled || !guide.text.trim()) return passthrough;
-
-  const level = resolveEmojiIntensity(opts.persona).level;
-  const speaker = deriveSpeakerPersona(opts.persona);
-  let inTokens = 0;
-  let outTokens = 0;
-  let costCents = 0;
-
-  const evaluate = async (body: string) => {
-    const imgCount = (body.match(IMG_MARKER_RE) || []).length;
-    const det = reviewChecklist({ bodyMd: body, imgMarkerCount: imgCount, emojiLevel: level });
-    let rubricScore: number | null = null;
-    let rubricIssues: string[] = [];
-    try {
-      const res = await llm({
-        system: opts.preamble,
-        callerUserId: opts.callerUserId,
-        maxTokens: 900,
-        messages: [
-          { role: "user", content: reviewRubricPrompt({ title: opts.title, bodyMd: body, speaker }) },
-        ],
-      });
-      inTokens += res.inputTokens;
-      outTokens += res.outputTokens;
-      costCents += res.costCents;
-      const parsed = safeJson<{ score?: number; issues?: string[] }>(res.text);
-      if (parsed && typeof parsed.score === "number") rubricScore = parsed.score;
-      if (parsed && Array.isArray(parsed.issues)) {
-        rubricIssues = parsed.issues.filter((s) => typeof s === "string" && s.trim()).slice(0, 6);
-      }
-    } catch {
-      // 루브릭 호출 실패 시 결정론 체크리스트만으로 판정한다.
-    }
-    const belowRubric = rubricScore !== null && rubricScore < REVIEW_V1_PASS;
-    const pass = det.failed.length === 0 && !belowRubric;
-    return { det, rubricScore, rubricIssues, pass };
-  };
-
-  const first = await evaluate(opts.bodyMd);
-  if (first.pass) {
-    return { ...passthrough, rubricScore: first.rubricScore, inTokens, outTokens, costCents };
-  }
-
-  // 미달 → 지적사항을 담아 한 번 재작성 후 재평가. 개선되면 채택, 아니면 원본 유지.
-  let finalBody = opts.bodyMd;
-  let rewritten = false;
-  try {
-    const res = await llm({
-      system: opts.preamble,
-      callerUserId: opts.callerUserId,
-      maxTokens: opts.maxTokens,
-      messages: [
-        {
-          role: "user",
-          content: reviewRewritePrompt({
-            title: opts.title,
-            bodyMd: opts.bodyMd,
-            persona: opts.persona,
-            failedChecks: first.det.failed,
-            rubricIssues: first.rubricIssues,
-            primaryKeyword: opts.primaryKeyword,
-            minChars: opts.minChars,
-          }),
-        },
-      ],
-    });
-    inTokens += res.inputTokens;
-    outTokens += res.outputTokens;
-    costCents += res.costCents;
-    const out = res.text
-      .trim()
-      .replace(/^```(?:markdown)?/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
-    const origImgs = (opts.bodyMd.match(IMG_MARKER_RE) || []).length;
-    const newImgs = (out.match(IMG_MARKER_RE) || []).length;
-    const outChars = out.replace(/\s+/g, "").length;
-    const floor = opts.minChars ? opts.minChars * 0.9 : opts.bodyMd.replace(/\s+/g, "").length * 0.6;
-    // 이미지 마커 보존 + 과도 축소 아님일 때만 재작성본 재평가.
-    if (newImgs >= origImgs && outChars >= floor && out.length > 50) {
-      const second = await evaluate(out);
-      // 재작성이 결정론 미달 수를 줄였거나 루브릭 점수를 올렸으면 채택.
-      const improved =
-        second.det.failed.length < first.det.failed.length ||
-        (second.rubricScore ?? 0) > (first.rubricScore ?? 0) ||
-        second.pass;
-      if (improved) {
-        finalBody = out;
-        rewritten = true;
-        return {
-          bodyMd: finalBody,
-          rubricScore: second.rubricScore,
-          issues: buildReviewIssues(second.det.failed, second.rubricScore, second.rubricIssues),
-          rewritten,
-          inTokens,
-          outTokens,
-          costCents,
-        };
-      }
-    }
-  } catch {
-    // 재작성 실패 → 원본 유지 + 1차 판정 issues 노출.
-  }
-
-  return {
-    bodyMd: finalBody,
-    rubricScore: first.rubricScore,
-    issues: buildReviewIssues(first.det.failed, first.rubricScore, first.rubricIssues),
-    rewritten,
-    inTokens,
-    outTokens,
-    costCents,
-  };
-}
-
-const REVIEW_V1_PASS = REVIEW_V1.rubricPassScore; // 완화된 기준(6)과 동기화 — 하드코딩 금지
-
-/**
- * `[슬롯: …]` 과다 = 재료 부족. 검토 대기(ready_for_review)로 올리지 않고 반려(failed)한다.
- * WHY: 페르소나의 시설·기구·회비가 비어 있으면 LLM이 채울 사실이 없어 '양식지' 같은 글이 나온다.
- * 그대로 검토 대기에 쌓이면 검수자가 원인을 모른 채 빈칸 글을 받는다(실제 18개짜리 초안 발생).
- * 플레이스홀더 장치 자체는 할루시네이션 방지에 필요하므로 유지하고, 과다일 때만 출고를 막는다.
- */
-export function slotOverflowRejection(bodyMd: string): { count: number; reason: string } | null {
-  const count = countSlotPlaceholders(bodyMd);
-  if (count <= REVIEW_V1.slotMaxAllowed) return null;
-  return {
-    count,
-    reason:
-      `⛔ 재료 부족으로 반려: 본문에 [슬롯: …] 플레이스홀더가 ${count}개 남았습니다(허용 ${REVIEW_V1.slotMaxAllowed}개). ` +
-      `페르소나에 시설·기구·회비 정보가 없어 글에 쓸 사실이 부족한 상태입니다. ` +
-      `페르소나 정보를 채우고 다시 생성하세요.`,
-  };
-}
-
-/** 검수자 노출용 issue 라벨 조립(seoIssues 에 얹음). */
-function buildReviewIssues(
-  failed: string[],
-  rubricScore: number | null,
-  rubricIssues: string[]
-): string[] {
-  const out: string[] = [];
-  if (failed.length) out.push(`📝 후기 필수요소 미충족: ${failed.join(", ")}`);
-  if (rubricScore !== null && rubricScore < REVIEW_V1_PASS) {
-    out.push(`📝 사람다움 루브릭 ${rubricScore}/10 (기준 ${REVIEW_V1_PASS})${rubricIssues.length ? ` — ${rubricIssues.slice(0, 3).join(" / ")}` : ""}`);
-  }
-  return out;
-}
-
-/**
- * 목표 길이에 못 미친 본문을 목표까지 반복 확장한다(최대 3패스).
- * WHY: 모델은 큰 분량을 단일 패스로 잘 안 따른다(자동·반자동 공통). "전체를 다시 길게 써라"는
- * 방식은 gpt-4o가 비슷한 길이로 리라이트해버려 증가가 안 됐다(실측 982자에서 정체).
- * 그래서 "아직 안 다룬 소주제로 이어질 새 H2 섹션만 작성"하게 하고 기존 본문에 끼워 넣는다 —
- * 증가가 구조적으로 보장되고 모델이 훨씬 잘 따른다. 목표의 95%에 도달하거나 새 내용을
- * 못 만들면 중단한다. 자동·반자동 경로가 이 한 함수를 공유한다.
- */
-/**
- * 확장 섹션을 '마지막 H2 섹션' **앞**에 끼워 넣는다.
- * WHY: 그냥 뒤에 붙이면 원본의 마무리·CTA 문단 뒤로 새 섹션이 이어져 글이 끝났다가 다시
- * 시작한다(실측: 2026-08-04 검증 3편 중 길이 확장이 돈 2편에서 전부 발생). 마무리는 본문
- * 마지막 섹션에 들어있으므로, 그 섹션을 항상 맨 뒤에 남기면 흐름이 깨지지 않는다.
- * H2가 없거나 1개뿐이면 끼워 넣을 자리가 없으니 종전대로 덧붙인다.
- */
-export function insertBeforeLastSection(body: string, add: string): string {
-  const idx = body.lastIndexOf("\n## ");
-  if (idx < 0) return `${body.trimEnd()}\n\n${add}`;
-  const head = body.slice(0, idx).trimEnd();
-  const lastSection = body.slice(idx + 1).trimEnd();
-  return `${head}\n\n${add}\n\n${lastSection}`;
-}
-
-async function expandBodyToTarget(opts: {
-  rawBody: string;
-  lengthTarget: number;
-  preamble: string;
+  groundingText: string;
   callerUserId?: string;
-  maxTokens?: number;
-  /** 페르소나 '없는 시설/금지 소재' — 분량 확보 시 지어내지 못하게 명시 열거한다. */
-  forbiddenTerms?: string[];
-  /** 일반 상식 소재 — 패딩 대신 실재료로 확장하도록 참고 제공. */
-  domainMaterial?: string[];
-}): Promise<{ bodyMd: string; inTokens: number; outTokens: number; costCents: number }> {
-  const noWs = (s: string) => s.replace(/\s+/g, "").length;
-  let rawBody = opts.rawBody;
-  let cur = noWs(rawBody);
-  let inTokens = 0;
-  let outTokens = 0;
-  let costCents = 0;
-  // 갭이 클수록 패스를 더 준다 — 새 내용을 못 만들면 아래에서 자동 중단되므로 비용 안전.
-  const maxPasses = opts.lengthTarget - cur >= 1000 ? 3 : 2;
-  for (let pass = 0; pass < maxPasses && cur < opts.lengthTarget * 0.95; pass++) {
-    const gap = opts.lengthTarget - cur;
-    const addSections = Math.max(2, Math.round(gap / 450));
-    const more = await llm({
-      system: opts.preamble,
-      callerUserId: opts.callerUserId,
-      maxTokens: opts.maxTokens,
-      messages: [
-        {
-          role: "user",
-          content: [
-            `# 작업: 아래 블로그 본문 '중간'에 끼워 넣을 새 섹션을 작성`,
-            `현재 본문은 공백 제외 약 ${cur}자입니다. 목표 약 ${opts.lengthTarget}자까지 약 ${gap}자가 더 필요합니다.`,
-            `아래 "기존 본문"에서 아직 다루지 않은 소주제로 새 H2(##) 섹션을 ${addSections}개 작성하세요. 각 섹션은 공백 제외 300~500자 분량의 구체적 내용으로.`,
-            `- 기존 본문 내용을 반복하지 말고, 새로운 정보·관점·이용 팁·자주 묻는 질문 등으로 다양화하세요.`,
-            `- 글의 톤·말투·격식·금지어는 기존 본문과 동일하게 유지하세요.`,
-            `- 확인되지 않은 시설·프로그램·수치·가격을 지어내지 마세요(없는 사실 날조 금지). 확실한 것의 디테일·독자 관점·일반적 정황으로 자연스럽게 채우세요.`,
-            opts.forbiddenTerms?.length
-              ? `- **다음은 이 업체에 없으므로 절대 언급 금지(띄어쓰기·표현 우회도 금지): ${opts.forbiddenTerms.join(", ")}.** 분량이 부족해도 이것들로 채우지 마세요.`
-              : null,
-            opts.domainMaterial?.length
-              ? `- 아래 "일반 상식 소재"를 구체적으로 활용해 채우세요(막연한 분위기 문장 금지). 단 이 업체가 제공하는 프로그램으로 단정하진 마세요:\n${opts.domainMaterial
-                  .map((s) => `    · ${s}`)
-                  .join("\n")}`
-              : null,
-            `- 이 섹션들은 **기존 본문의 마지막 섹션 앞에** 삽입됩니다. 글을 마무리하는 문장("마지막으로", "정리하자면", "도움이 되셨길")으로 끝내지 말고, 뒤에 다른 섹션이 더 이어지는 중간 섹션처럼 쓰세요.`,
-            `- 제목(#)·인사말·마무리 CTA·이미지 마커(<!-- IMG -->)는 넣지 마세요. 오직 새 ## 섹션 본문만 출력.`,
-            ``,
-            `**기존 본문 (참고용 — 다시 출력하지 마세요)**:`,
-            "```markdown",
-            rawBody,
-            "```",
-            ``,
-            `이어질 새 ## 섹션들의 Markdown만 출력하세요.`,
-          ]
-            .filter((x) => x !== null)
-            .join("\n"),
-        },
-      ],
-    });
-    const add = more.text
-      .trim()
-      .replace(/^```(?:markdown)?/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
-    inTokens += more.inputTokens;
-    outTokens += more.outputTokens;
-    costCents += more.costCents;
-    if (noWs(add) < 80) break; // 모델이 새 내용을 못 만들면 직전 최선값 유지하고 중단
-    rawBody = insertBeforeLastSection(rawBody, add);
-    cur = noWs(rawBody);
+  blogId: string;
+  personaId: string | null;
+  blogName: string;
+  ownerId: string | null;
+  draftId: string | null;
+  allowRevise?: boolean;
+}) {
+  const guide = await getGlobalWritingGuide();
+  const samples = await loadStyleSamples(opts.persona.category).catch(() => []);
+  const review = await runModelReview({
+    persona: opts.persona,
+    title: opts.title,
+    bodyMd: opts.bodyMd,
+    guideText: guide.enabled ? guide.text : "",
+    factsText: opts.groundingText,
+    styleSamplesText: samples.length ? styleSampleBlock(samples, "") : undefined,
+    callerUserId: opts.callerUserId,
+    allowRevise: opts.allowRevise,
+  });
+  return review;
+}
+
+/** 검수 결과를 초안 행에 저장할 필드로. */
+function reviewColumns(review: Awaited<ReturnType<typeof reviewStage>>) {
+  return {
+    reviewVerdict: review.verdict,
+    reviewReason: review.reason,
+    reviewFlagsJson: JSON.stringify(review.hardFlags),
+    reviewModel: review.model,
+    reviewMetaJson: JSON.stringify(review.meta),
+  };
+}
+
+/** 검수 모델의 설정 결함 보고 → 개선 제안 기록(실패해도 초안 저장을 막지 않는다). */
+async function reportSettingIssues(review: Awaited<ReturnType<typeof reviewStage>>, ctx: {
+  draftId: string;
+  blogId: string;
+  personaId: string | null;
+  blogName: string;
+  ownerId: string | null;
+  callerUserId?: string;
+}) {
+  if (!review.settingIssues.length) return;
+  try {
+    const stat = await recordSettingIssues({ ...ctx, issues: review.settingIssues });
+    console.log(`[proposals] draft ${ctx.draftId}: 생성 ${stat.created} · 합산 ${stat.merged} · 승격 ${stat.promoted} · 제외 ${stat.skipped} · 유사판정 ${stat.liteCalls}회`);
+  } catch (err) {
+    console.error("[proposals] 설정 결함 기록 실패:", err);
   }
-  return { bodyMd: rawBody, inTokens, outTokens, costCents };
 }
 
 /**
@@ -890,29 +650,9 @@ export async function generateDraftForBlog(
   let bodyOutTokens = bodyRes.outputTokens;
   let bodyCostCents = bodyRes.costCents;
 
-  /* --- Step 3.4: 목표 분량 미달 시 반복 확장 ---
-     단일 패스는 목표의 절반가량만 산출된다(로그 실측) → 반자동/재작성과 동일 확장 전략. */
-  if (lengthTarget && bodyRes.model !== "mock") {
-    const exp = await expandBodyToTarget({
-      rawBody,
-      lengthTarget,
-      preamble,
-      callerUserId,
-      maxTokens: bodyMaxTokens,
-      forbiddenTerms: persona.absentFacilities,
-      domainMaterial,
-    });
-    rawBody = exp.bodyMd;
-    bodyInTokens += exp.inTokens;
-    bodyOutTokens += exp.outTokens;
-    bodyCostCents += exp.costCents;
-  }
+  /* (분량 미달 반복 확장 단계는 2026-10-13 A안으로 제거 — 목표 분량은 프롬프트 지시로만 전달하고 판단은 모델 검수가 한다) */
 
-  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 ---
-     목표 분량 글은 humanize가 분량을 깎지 못하도록 minChars(현재 95%) floor + max_tokens를 건다. */
-  const humMinChars = lengthTarget
-    ? Math.round(rawBody.replace(/\s+/g, "").length * 0.95)
-    : undefined;
+  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 --- */
   const hum = await humanizeBody({
     bodyMd: rawBody,
     title: topicRow!.title,
@@ -921,7 +661,6 @@ export async function generateDraftForBlog(
     model: bodyRes.model,
     brandName: persona.blogName,
     primaryKeyword: topicRow!.primaryKeyword,
-    minChars: humMinChars,
     maxTokens: bodyMaxTokens,
     emojiLevel: resolveEmojiIntensity(persona).level,
   });
@@ -947,34 +686,20 @@ export async function generateDraftForBlog(
   // 최종 분리: 작성 지시문·내부 메모가 본문에 새어든 흔적 제거(독자 노출 방지).
   const sanitized = sanitizeBody(guard.bodyMd);
 
-  /* --- Step 3.7: 개정 가이드 자가검증 게이트(review_v1) — 미달 시 1회 재작성 --- */
-  const review = await reviewVerifyPass({
+  /* --- Step 4: 모델 검수(A안) — 글 전체를 검수 모델이 읽고 approve/revise/reject 판정, revise 최대 1회 --- */
+  const review = await reviewStage({
     persona,
-    bodyMd: sanitized,
     title: topicRow!.title,
-    preamble,
+    bodyMd: sanitized,
+    groundingText,
     callerUserId,
-    model: bodyRes.model,
-    maxTokens: bodyMaxTokens,
-    primaryKeyword: topicRow!.primaryKeyword,
-    minChars: lengthTarget ? Math.round(sanitized.replace(/\s+/g, "").length * 0.9) : undefined,
+    blogId,
+    personaId: activePersona.id,
+    blogName: blog.displayName,
+    ownerId: blog.ownerId ?? null,
+    draftId: existingDraftId ?? null,
   });
   const bodyMd = sanitizeBody(review.bodyMd);
-
-  /* --- Step 4: score --- */
-  const seo = scoreSeo({
-    title: topicRow!.title,
-    bodyMd,
-    primaryKeyword: topicRow!.primaryKeyword,
-    secondaryKeywords: JSON.parse(topicRow!.secondaryKeywordsJson || "[]"),
-    imageCount: outline.imagePlan.length,
-    minLen: persona.preferredLengthMin,
-    maxLen: persona.preferredLengthMax,
-  });
-  const human = scoreHuman({
-    bodyMd,
-    forbiddenWords: persona.forbiddenWords,
-  });
 
   const totalInTokens =
     topicInTokens + outlineRes.inputTokens + dm.inTokens + bodyInTokens + hum.inTokens + guard.inTokens + review.inTokens;
@@ -983,36 +708,8 @@ export async function generateDraftForBlog(
   const totalCostCents =
     topicCostCents + outlineRes.costCents + dm.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
 
-  /* 발행 전 게이트(업종 무관): 사실검증 후에도 근거 없는 구체 주장(가격·수치·연혁·수상·규모·없는시설)이
-     남았는지 결정론 검사해 플래그한다. 검수자가 카드에서 바로 인지하도록 seoIssues에 얹는다(비차단). */
-  const fabHits = findFabricationHits(
-    `${topicRow!.title}\n${bodyMd}`,
-    groundingText,
-    persona.absentFacilities
-  );
-
-  /* --- 대화형 보강 루프: 생성 중 폴백(③) ---
-     목표 하한 미달 + 근거 없는 확장이 factGuard에 걸려 정상 확장으로 못 채운 상태면
-     사실 소재 부족이 원인 → 진전 여지가 있으면 되묻고(초안 미저장), 진전 없으면 한계 고지 후 저장. */
-  if (
-    isLengthUnfillable({
-      reachedChars: bodyMd.replace(/\s+/g, "").length,
-      lengthTarget,
-      fabricationKinds: fabHits.map((h) => h.kind),
-    })
-  ) {
-    if (canClarify) {
-      const req = buildAugmentationRequest(
-        ["material"],
-        `현재 약 ${bodyMd.replace(/\s+/g, "").length}자까지 썼지만 목표 분량을 근거 있는 내용으로 채우기엔 사실 소재가 부족합니다.`
-      );
-      throw new NeedsMoreInfoError(req, ["material"], supplements);
-    }
-    limitationFlag = limitationFlag ?? limitationNotice(["material"]);
-  }
-
-  /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
-  const slotReject = slotOverflowRejection(bodyMd);
+  /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) ---
+     모든 판정은 사람 검수(ready_for_review)로 간다. 모델 판정은 뱃지·사유로 표시되고 자동 승인은 없다. */
   const draftValues = {
       blogId,
       topicId: topicRow!.id,
@@ -1020,26 +717,16 @@ export async function generateDraftForBlog(
       summary: topicRow!.angle ?? null,
       bodyMd,
       imagePlanJson: JSON.stringify(outline.imagePlan),
-      status: (slotReject ? "failed" : "ready_for_review") as "failed" | "ready_for_review",
+      status: "ready_for_review" as const,
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
-      seoScore: seo.score,
       seoIssuesJson: JSON.stringify([
-        ...(slotReject ? [slotReject.reason] : []),
-        ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
         ...(guard.removed.length
           ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
           : []),
-        ...(guard.forbiddenHits.length
-          ? [`🚫 금지 소재 잔존: ${guard.forbiddenHits.join(", ")} (하드 위반 — 재수정 필요)`]
-          : []),
-        ...(fabHits.length
-          ? [`⚠️ 미검증 주장 잔존: ${fabHits.map((h) => h.match).join(", ")} (사실 확인 필요)`]
-          : []),
-        ...review.issues,
         ...(limitationFlag ? [limitationFlag] : []),
       ]),
-      humanScore: human.score,
+      ...reviewColumns(review),
       llmModel: bodyRes.model,
       llmInputTokens: totalInTokens,
       llmOutputTokens: totalOutTokens,
@@ -1075,12 +762,19 @@ export async function generateDraftForBlog(
     });
   }
 
+  await reportSettingIssues(review, {
+    draftId: draft.id,
+    blogId,
+    personaId: activePersona.id,
+    blogName: blog.displayName,
+    ownerId: blog.ownerId ?? null,
+    callerUserId,
+  });
+
   await db.insert(schema.notifications).values({
     type: "draft_ready",
-    title: slotReject
-      ? `초안 반려(재료 부족) — ${blog.displayName}`
-      : `초안 준비됨 — ${blog.displayName}`,
-    body: slotReject ? `${draft.title} — ${slotReject.reason}` : draft.title,
+    title: `초안 준비됨 — ${blog.displayName}`,
+    body: `${draft.title} · 자동 검수: ${VERDICT_LABEL[review.verdict]}`,
     linkUrl: `/queue/${draft.id}`,
     channel: "inapp",
   });
@@ -1089,11 +783,9 @@ export async function generateDraftForBlog(
   if (callerUserId) {
     void sendTelegramToUser(
       callerUserId,
-      slotReject
-        ? `⛔ 초안이 재료 부족으로 반려되었습니다.\n블로그: ${blog.displayName}\n제목: ${draft.title}\n사유: [슬롯:] 플레이스홀더 ${slotReject.count}개 잔존(허용 ${REVIEW_V1.slotMaxAllowed}개) — 페르소나의 시설·기구·회비 정보를 채운 뒤 다시 생성해 주세요.`
-        : `📝 새 초안이 생성되었습니다!\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
+      `📝 새 초안이 생성되었습니다!\n블로그: ${blog.displayName}\n제목: ${draft.title}\n자동 검수: ${VERDICT_LABEL[review.verdict]} — ${review.reason.slice(0, 120)}\n검토 후 발행해 주세요.`
     );
-    if (!slotReject && userShotItems.length > 0) {
+    if (userShotItems.length > 0) {
       void sendTelegramToUser(
         callerUserId,
         `🖼️ 이미지 업로드가 필요합니다!\n블로그: ${blog.displayName}\n요청된 이미지를 업로드해 주세요.`
@@ -1261,28 +953,9 @@ export async function generateDraftFromBrief(opts: {
   let bodyOutTokens = bodyRes.outputTokens;
   let bodyCostCents = bodyRes.costCents;
 
-  /* --- Step 3.4: 명시 길이 미달 시 반복 확장(자동 경로와 공유 헬퍼) --- */
-  if (lengthTarget) {
-    const exp = await expandBodyToTarget({
-      rawBody,
-      lengthTarget,
-      preamble,
-      callerUserId: opts.callerUserId,
-      maxTokens: bodyMaxTokens,
-      forbiddenTerms: persona.absentFacilities,
-      domainMaterial,
-    });
-    rawBody = exp.bodyMd;
-    bodyInTokens += exp.inTokens;
-    bodyOutTokens += exp.outTokens;
-    bodyCostCents += exp.costCents;
-  }
+  /* (명시 길이 미달 반복 확장 단계는 2026-10-13 A안으로 제거 — 길이 지시는 프롬프트로만, 판단은 모델 검수) */
 
-  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 ---
-     명시 길이 글은 humanize가 분량을 깎지 못하도록 minChars(현재 95%) floor + max_tokens를 건다. */
-  const humMinChars = lengthTarget
-    ? Math.round(rawBody.replace(/\s+/g, "").length * 0.95)
-    : undefined;
+  /* --- Step 3.5: 사람화(AI 티 제거) 리라이트 --- */
   const hum = await humanizeBody({
     bodyMd: rawBody,
     title,
@@ -1291,7 +964,6 @@ export async function generateDraftFromBrief(opts: {
     model: bodyRes.model,
     brandName: persona.blogName,
     primaryKeyword,
-    minChars: humMinChars,
     maxTokens: bodyMaxTokens,
     emojiLevel: resolveEmojiIntensity(persona).level,
   });
@@ -1318,60 +990,26 @@ export async function generateDraftFromBrief(opts: {
   // 최종 분리: 작성 지시문·내부 메모가 본문에 새어든 흔적 제거(독자 노출 방지).
   const sanitized = sanitizeBody(guard.bodyMd);
 
-  /* --- Step 3.7: 개정 가이드 자가검증 게이트(review_v1) — 미달 시 1회 재작성 --- */
-  const review = await reviewVerifyPass({
+  /* --- Step 4: 모델 검수(A안) — revise 최대 1회 --- */
+  const review = await reviewStage({
     persona,
-    bodyMd: sanitized,
     title,
-    preamble,
+    bodyMd: sanitized,
+    groundingText,
     callerUserId: opts.callerUserId,
-    model: bodyRes.model,
-    maxTokens: bodyMaxTokens,
-    primaryKeyword,
-    minChars: lengthTarget ? Math.round(sanitized.replace(/\s+/g, "").length * 0.9) : undefined,
+    blogId: opts.blogId,
+    personaId: activePersona.id,
+    blogName: blog.displayName,
+    ownerId: blog.ownerId ?? null,
+    draftId: opts.existingDraftId ?? null,
   });
   const bodyMd = sanitizeBody(review.bodyMd);
-
-  /* --- Step 4: score --- */
-  const seo = scoreSeo({
-    title,
-    bodyMd,
-    primaryKeyword,
-    secondaryKeywords,
-    imageCount: outline.imagePlan.length,
-    // 사용자가 명시 길이를 줬으면 그 목표(±10%)를 SEO 길이 기준으로 쓴다 — 페르소나 기본 분량으로
-    // 채점하면 명시 길이 글이 '너무 김'으로 부당하게 감점된다.
-    minLen: lengthTarget ? Math.round(lengthTarget * 0.9) : persona.preferredLengthMin,
-    maxLen: lengthTarget ? Math.round(lengthTarget * 1.2) : persona.preferredLengthMax,
-  });
-  const human = scoreHuman({ bodyMd, forbiddenWords: persona.forbiddenWords });
-
-  const fabHits = findFabricationHits(`${title}\n${bodyMd}`, groundingText, persona.absentFacilities);
-
-  /* --- 대화형 보강 루프: 생성 중 폴백(③) --- */
-  if (
-    isLengthUnfillable({
-      reachedChars: bodyMd.replace(/\s+/g, "").length,
-      lengthTarget,
-      fabricationKinds: fabHits.map((h) => h.kind),
-    })
-  ) {
-    if (canClarify) {
-      const req = buildAugmentationRequest(
-        ["material"],
-        `현재 약 ${bodyMd.replace(/\s+/g, "").length}자까지 썼지만 목표 분량을 근거 있는 내용으로 채우기엔 사실 소재가 부족합니다.`
-      );
-      throw new NeedsMoreInfoError(req, ["material"], supplements);
-    }
-    limitationFlag = limitationFlag ?? limitationNotice(["material"]);
-  }
 
   const totalInTokens = outlineRes.inputTokens + dm.inTokens + bodyInTokens + hum.inTokens + guard.inTokens + review.inTokens;
   const totalOutTokens = outlineRes.outputTokens + dm.outTokens + bodyOutTokens + hum.outTokens + guard.outTokens + review.outTokens;
   const totalCostCents = outlineRes.costCents + dm.costCents + bodyCostCents + hum.costCents + guard.costCents + review.costCents;
 
   /* --- Step 5: persist draft (백그라운드면 placeholder 행 UPDATE, 아니면 INSERT) --- */
-  const slotReject = slotOverflowRejection(bodyMd);
   const draftValues = {
       blogId: opts.blogId,
       topicId: topicRow.id,
@@ -1379,26 +1017,16 @@ export async function generateDraftFromBrief(opts: {
       summary: brief ? brief.slice(0, 200) : null,
       bodyMd,
       imagePlanJson: JSON.stringify(outline.imagePlan),
-      status: (slotReject ? "failed" : "ready_for_review") as "failed" | "ready_for_review",
+      status: "ready_for_review" as const,
       charCount: bodyMd.replace(/\s+/g, "").length,
       imageCount: outline.imagePlan.length,
-      seoScore: seo.score,
       seoIssuesJson: JSON.stringify([
-        ...(slotReject ? [slotReject.reason] : []),
-        ...seo.checks.filter((c) => !c.ok).map((c) => c.label),
         ...(guard.removed.length
           ? [`🧹 사실검증: 근거없는 주장 ${guard.removed.length}건 제거`]
           : []),
-        ...(guard.forbiddenHits.length
-          ? [`🚫 금지 소재 잔존: ${guard.forbiddenHits.join(", ")} (하드 위반 — 재수정 필요)`]
-          : []),
-        ...(fabHits.length
-          ? [`⚠️ 미검증 주장 잔존: ${fabHits.map((h) => h.match).join(", ")} (사실 확인 필요)`]
-          : []),
-        ...review.issues,
         ...(limitationFlag ? [limitationFlag] : []),
       ]),
-      humanScore: human.score,
+      ...reviewColumns(review),
       llmModel: bodyRes.model,
       llmInputTokens: totalInTokens,
       llmOutputTokens: totalOutTokens,
@@ -1453,12 +1081,19 @@ export async function generateDraftFromBrief(opts: {
     }
   }
 
+  await reportSettingIssues(review, {
+    draftId: draft.id,
+    blogId: opts.blogId,
+    personaId: activePersona.id,
+    blogName: blog.displayName,
+    ownerId: blog.ownerId ?? null,
+    callerUserId: opts.callerUserId,
+  });
+
   await db.insert(schema.notifications).values({
     type: "draft_ready",
-    title: slotReject
-      ? `초안 반려(재료 부족) — ${blog.displayName}`
-      : `초안 준비됨 — ${blog.displayName}`,
-    body: slotReject ? `${draft.title} — ${slotReject.reason}` : draft.title,
+    title: `초안 준비됨 — ${blog.displayName}`,
+    body: `${draft.title} · 자동 검수: ${VERDICT_LABEL[review.verdict]}`,
     linkUrl: `/queue/${draft.id}`,
     channel: "inapp",
   });
@@ -1466,9 +1101,7 @@ export async function generateDraftFromBrief(opts: {
   if (opts.callerUserId) {
     void sendTelegramToUser(
       opts.callerUserId,
-      slotReject
-        ? `⛔ 초안이 재료 부족으로 반려되었습니다. (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n사유: [슬롯:] 플레이스홀더 ${slotReject.count}개 잔존(허용 ${REVIEW_V1.slotMaxAllowed}개) — 페르소나의 시설·기구·회비 정보를 채운 뒤 다시 생성해 주세요.`
-        : `📝 새 초안이 생성되었습니다! (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n검토 후 발행해 주세요.`
+      `📝 새 초안이 생성되었습니다! (반자동)\n블로그: ${blog.displayName}\n제목: ${draft.title}\n자동 검수: ${VERDICT_LABEL[review.verdict]} — ${review.reason.slice(0, 120)}\n검토 후 발행해 주세요.`
     );
   }
 
@@ -1653,8 +1286,8 @@ export async function reviseDraftWithFeedback(opts: {
       feedbackTags: safeJson<string[]>(r.feedbackTagsJson) ?? [],
     }));
 
-  /* 길이 의도를 LLM 호출 전에 계산한다 — 큰 확장 목표면 max_tokens를 올리고(기본 4096은
-     3000자 한국어 출력+JSON을 잘라낸다), 결과가 목표에 크게 못 미치면 확장 패스를 반복하기 위함. */
+  /* 길이 의도를 LLM 호출 전에 계산한다 — 큰 확장 목표면 max_tokens를 올린다(기본 4096은
+     3000자 한국어 출력+JSON을 잘라낸다). 목표 미달 시 반복 확장은 A안으로 제거(판단은 모델 검수). */
   const lenIntent = parseLengthIntent(
     opts.feedback,
     draft.bodyMd.replace(/\s+/g, "").length,
@@ -1687,37 +1320,14 @@ export async function reviseDraftWithFeedback(opts: {
       ],
     });
 
-  let res = await reviseOnce(draft.title, draft.bodyMd);
+  const res = await reviseOnce(draft.title, draft.bodyMd);
   const parsed =
     safeJson<{ title: string; bodyMd: string }>(res.text) ?? {
       title: draft.title,
       bodyMd: res.text,
     };
 
-  /* 확장 목표 미달 시 반복 확장(최대 2회 추가).
-     WHY: 모델이 큰 분량 확장을 단일 패스로 잘 안 따른다(실측 600→3000 요청에 ~900자, 30%).
-     직전 결과를 입력으로 같은 목표를 다시 걸어, 목표의 90%에 도달하거나 더 이상 안 늘면 중단한다. */
-  if (lenIntent?.direction === "up") {
-    const target = lenIntent.targetChars;
-    let cur = parsed.bodyMd.replace(/\s+/g, "").length;
-    for (let pass = 0; pass < 2 && cur < target * 0.9; pass++) {
-      const more = await reviseOnce(parsed.title, parsed.bodyMd);
-      const next = safeJson<{ title: string; bodyMd: string }>(more.text);
-      const nextChars = next ? next.bodyMd.replace(/\s+/g, "").length : 0;
-      if (!next || nextChars <= cur * 1.02) break; // 더 안 늘면(또는 파싱 실패) 직전 최선값 유지하고 중단
-      parsed.title = next.title;
-      parsed.bodyMd = next.bodyMd;
-      cur = nextChars;
-      res = more;
-    }
-  }
-
-  /* 재작성 결과도 AI 티 제거(사람화) 패스 적용.
-     분량 늘리기 반려면 humanize가 길이를 깎지 못하도록 minChars(revise 결과의 95%)를 건다. */
-  const humMinChars =
-    lenIntent?.direction === "up"
-      ? Math.round(parsed.bodyMd.replace(/\s+/g, "").length * 0.95)
-      : undefined;
+  /* 재작성 결과도 AI 티 제거(사람화) 패스 적용. */
   const hum = await humanizeBody({
     bodyMd: parsed.bodyMd,
     title: parsed.title,
@@ -1726,26 +1336,27 @@ export async function reviseDraftWithFeedback(opts: {
     model: res.model,
     brandName: persona.blogName,
     primaryKeyword: persona.focusKeywords[0],
-    minChars: humMinChars,
     maxTokens: reviseMaxTokens,
     emojiLevel: resolveEmojiIntensity(persona).level,
   });
-  parsed.bodyMd = hum.bodyMd;
+  parsed.bodyMd = sanitizeBody(hum.bodyMd);
 
-  const nextRev = draft.revisionRound + 1;
-  const seo = scoreSeo({
+  /* 모델 검수 — 사람 피드백 재작성본은 판정만(모델이 다시 고치지 않는다: 사람이 지시한 수정이므로). */
+  const review = await reviewStage({
+    persona,
     title: parsed.title,
     bodyMd: parsed.bodyMd,
-    primaryKeyword: "",
-    secondaryKeywords: [],
-    imageCount: draft.imageCount,
-    minLen: persona.preferredLengthMin,
-    maxLen: persona.preferredLengthMax,
+    groundingText: buildGroundingText(persona, { title: parsed.title, primaryKeyword: persona.focusKeywords[0] }),
+    callerUserId: opts.callerUserId,
+    blogId: draft.blogId,
+    personaId: activePersona.id,
+    blogName: draft.blog.displayName,
+    ownerId: draft.blog.ownerId ?? null,
+    draftId: draft.id,
+    allowRevise: false,
   });
-  const human = scoreHuman({
-    bodyMd: parsed.bodyMd,
-    forbiddenWords: persona.forbiddenWords,
-  });
+
+  const nextRev = draft.revisionRound + 1;
 
   await db.insert(schema.draftVersions).values({
     draftId: draft.id,
@@ -1763,15 +1374,23 @@ export async function reviseDraftWithFeedback(opts: {
       bodyMd: parsed.bodyMd,
       status: "ready_for_review",
       revisionRound: nextRev,
-      seoScore: seo.score,
-      humanScore: human.score,
       charCount: parsed.bodyMd.replace(/\s+/g, "").length,
-      llmInputTokens: (draft.llmInputTokens ?? 0) + res.inputTokens,
-      llmOutputTokens: (draft.llmOutputTokens ?? 0) + res.outputTokens,
-      llmCostCents: (draft.llmCostCents ?? 0) + res.costCents,
+      ...reviewColumns(review),
+      llmInputTokens: (draft.llmInputTokens ?? 0) + res.inputTokens + hum.inTokens + review.inTokens,
+      llmOutputTokens: (draft.llmOutputTokens ?? 0) + res.outputTokens + hum.outTokens + review.outTokens,
+      llmCostCents: (draft.llmCostCents ?? 0) + res.costCents + hum.costCents + review.costCents,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(schema.drafts.id, draft.id));
+
+  await reportSettingIssues(review, {
+    draftId: draft.id,
+    blogId: draft.blogId,
+    personaId: activePersona.id,
+    blogName: draft.blog.displayName,
+    ownerId: draft.blog.ownerId ?? null,
+    callerUserId: opts.callerUserId,
+  });
 
   await db.insert(schema.approvals).values({
     draftId: draft.id,

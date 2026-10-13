@@ -41,6 +41,12 @@ export const users = sqliteTable("users", {
   unsplashKey: text("unsplash_key"),
   pexelsKey: text("pexels_key"),
   googleAiKey: text("google_ai_key"),
+  // 이미지 소스 사용여부·시도순서·자동검증 설정(JSON, lib/image-source-config.ts). null = 기본값(전부 사용).
+  imageSourceConfigJson: text("image_source_config_json"),
+  // 카카오 알림톡 수신 번호(숫자만, 01012345678). unique 아님 — 한 사람이 계정 여러 개일 수 있음(2026-10-13 알림톡 전환).
+  phone: text("phone"),
+  notifyEnabled: integer("notify_enabled", { mode: "boolean" }).notNull().default(true),
+  // ── 텔레그램(10-13 알림톡 전환으로 미사용 · 되돌리기용으로 컬럼 유지) ──
   telegramChatId: text("telegram_chat_id"),
   // 일회성 텔레그램 연결코드(딥링크 /start <code>)와 만료시각(ISO). 연결 완료 시 비운다.
   telegramLinkCode: text("telegram_link_code"),
@@ -236,6 +242,16 @@ export const drafts = sqliteTable("drafts", {
   llmOutputTokens: integer("llm_output_tokens"),
   llmCostCents: integer("llm_cost_cents"),
 
+  /* === 모델 검수(2026-10-13 A안) ===
+     기계 점수(seoScore·humanScore)는 더 이상 쓰지 않고(컬럼은 nullable 유지), 검수 모델이 글 전체를 읽고
+     낸 판정을 저장한다. failed = 응답 파싱 실패·타임아웃(자동 승인 금지, 사람 검수로). */
+  reviewVerdict: text("review_verdict", { enum: ["approve", "revise", "reject", "failed"] }),
+  reviewReason: text("review_reason"),
+  reviewFlagsJson: text("review_flags_json").notNull().default("[]"),  // HardFlag[]
+  reviewModel: text("review_model"),
+  // 검수 호출 내역 {calls:[{model,purpose,inTokens,outTokens,costCents}], costCents, revised, at}
+  reviewMetaJson: text("review_meta_json"),
+
   scheduledPublishAt: text("scheduled_publish_at"),
   publishedAt: text("published_at"),
   publishedUrl: text("published_url"),
@@ -402,6 +418,54 @@ export const styleSamples = sqliteTable("style_samples", {
 });
 
 /* =========================================================================
+   ALIMTALK LOGS — 카카오 알림톡 발송 이력(드라이런·발송·실패). 관리자 «발송 이력» 탭 + 실패 배너 집계
+   ========================================================================= */
+export const alimtalkLogs = sqliteTable("alimtalk_logs", {
+  id: id(),
+  userId: text("user_id"),
+  event: text("event").notNull(),
+  to: text("to").notNull().default(""),
+  templateCode: text("template_code").notNull().default(""),
+  status: text("status", { enum: ["dry_run", "sent", "sms_sent", "failed", "skipped"] }).notNull(),
+  providerMessageId: text("provider_message_id"),
+  error: text("error"),
+  createdAt: text("created_at").notNull().default(sql`(CURRENT_TIMESTAMP)`),
+});
+
+/* =========================================================================
+   IMPROVEMENT_PROPOSALS — 검수 모델이 보고한 «설정(전역 가이드·페르소나) 결함» 개선 제안
+   - 생성 규칙(소음 방지): systemic+high 는 즉시 proposed, 그 외는 pending(보류 집계) 으로 두었다가
+     다른 초안 2건 이상에서 반복되면 proposed 로 승격. 거절 건과 같은 내용은 30일 재제안 금지.
+   - 적용은 사용자가 «동의» 를 눌렀을 때만(자동 적용 절대 금지). rollbackJson 에 적용 전 값을 보관.
+   ========================================================================= */
+export const improvementProposals = sqliteTable("improvement_proposals", {
+  id: id(),
+  draftId: text("draft_id").references(() => drafts.id, { onDelete: "set null" }),
+  blogId: text("blog_id").references(() => blogs.id, { onDelete: "cascade" }),
+  personaId: text("persona_id"),
+  target: text("target", { enum: ["global_guide", "persona"] }).notNull(),
+  field: text("field").notNull(),
+  problem: text("problem").notNull(),
+  proposedChangeJson: text("proposed_change_json").notNull().default("{}"), // {before, after}
+  confidence: text("confidence", { enum: ["high", "medium"] }).notNull().default("medium"),
+  systemic: integer("systemic", { mode: "boolean" }).notNull().default(false),
+  occurrenceCount: integer("occurrence_count").notNull().default(1),
+  evidenceDraftIdsJson: text("evidence_draft_ids_json").notNull().default("[]"),
+  targetUserIdsJson: text("target_user_ids_json").notNull().default("[]"),
+  status: text("status", {
+    enum: ["pending", "proposed", "accepted", "applied", "rejected", "rolled_back", "expired"],
+  }).notNull().default("pending"),
+  // 사용자가 «수정 후 적용» 으로 고친 after 값(적용된 실제 값). null 이면 proposedChange.after 그대로.
+  appliedAfter: text("applied_after"),
+  rejectReason: text("reject_reason"),
+  decidedBy: text("decided_by").references(() => users.id),
+  decidedAt: text("decided_at"),
+  appliedAt: text("applied_at"),
+  rollbackJson: text("rollback_json"),
+  ...timestamps,
+});
+
+/* =========================================================================
    SETTINGS — singleton-ish key/value (encrypted at app layer for secrets)
    ========================================================================= */
 export const settings = sqliteTable("settings", {
@@ -437,6 +501,12 @@ export const topicCandidatesRelations = relations(
 
 export const personasRelations = relations(personas, ({ one }) => ({
   blog: one(blogs, { fields: [personas.blogId], references: [blogs.id] }),
+}));
+
+export const improvementProposalsRelations = relations(improvementProposals, ({ one }) => ({
+  draft: one(drafts, { fields: [improvementProposals.draftId], references: [drafts.id] }),
+  blog: one(blogs, { fields: [improvementProposals.blogId], references: [blogs.id] }),
+  decider: one(users, { fields: [improvementProposals.decidedBy], references: [users.id] }),
 }));
 
 export const draftsRelations = relations(drafts, ({ one, many }) => ({

@@ -64,8 +64,15 @@ function isPlaceholderKey(k: string | null | undefined): boolean {
 
 export type LLMMessage = { role: "user" | "assistant"; content: string };
 
+/** 호출 용도 — provider 별 모델 배선(env)을 facade 안에서 고른다.
+ *  draft(기본)=글작성 OPENAI_MODEL_DRAFT · review=검수·개선안 OPENAI_MODEL_REVIEW(추론 high 고정) ·
+ *  review_lite=유사판정 잔무 OPENAI_MODEL_REVIEW_LITE(추론 low). Anthropic provider 면 ANTHROPIC_MODEL_* 대응. */
+export type LLMRole = "draft" | "review" | "review_lite";
+
 export type LLMOptions = {
   model?: string;
+  /** 용도별 모델 배선. model 을 직접 주면 그게 우선. */
+  role?: LLMRole;
   maxTokens?: number;
   system?: string;
   messages: LLMMessage[];
@@ -75,7 +82,7 @@ export type LLMOptions = {
   mockResponder?: (msgs: LLMMessage[]) => string;
   /** If provided, resolves the API key and provider from this user's settings. */
   callerUserId?: string;
-  /** 추론형 모델(gpt-5.x) 추론 강도 override. 구조적 단계(주제·아웃라인)는 "low"로
+  /** 추론형 모델(gpt-5.x 이상·o-시리즈) 추론 강도 override. 구조적 단계(주제·아웃라인)는 "low"로
    *  낮춰 속도↑(프로즈 퀄 무관), 창작 단계(본문·사람화)는 기본(high) 유지. */
   reasoningEffort?: "low" | "medium" | "high" | "xhigh";
 };
@@ -96,7 +103,32 @@ const PRICES_USD_PER_M: Record<string, { in: number; out: number }> = {
   "claude-haiku-4-5-20251001": { in: 0.8, out: 4 },
   "gpt-4o": { in: 5, out: 15 },
   "gpt-4o-mini": { in: 0.15, out: 0.6 },
+  // OpenAI 공식 단가(developers.openai.com/api/docs/pricing, 2026-10-13 확인, 표준 단가·272K 입력 이하).
+  // 표에 없는 모델은 claude-sonnet 단가로 집계되므로 모델 전환 시 반드시 추가.
+  "gpt-5.5": { in: 5, out: 30 },
+  "gpt-6-astra": { in: 10, out: 50 },
+  "gpt-6.1-sol": { in: 2, out: 10 },
 };
+
+export function modelForRole(provider: "anthropic" | "openai", role: LLMRole | undefined): string {
+  if (provider === "openai") {
+    if (role === "review") return env.OPENAI_MODEL_REVIEW;
+    if (role === "review_lite") return env.OPENAI_MODEL_REVIEW_LITE;
+    return env.OPENAI_MODEL_DRAFT;
+  }
+  return role === "review" || role === "review_lite" ? env.ANTHROPIC_MODEL_REVIEW : env.ANTHROPIC_MODEL_DRAFT;
+}
+
+/** 보고·설정 화면용 — 현재 배선된 모델 목록(비밀 없음). */
+export function currentModelWiring() {
+  return {
+    draft: env.OPENAI_MODEL_DRAFT,
+    review: env.OPENAI_MODEL_REVIEW,
+    reviewLite: env.OPENAI_MODEL_REVIEW_LITE,
+    anthropicDraft: env.ANTHROPIC_MODEL_DRAFT,
+    anthropicReview: env.ANTHROPIC_MODEL_REVIEW,
+  };
+}
 const USD_KRW = 1380;
 
 function costFor(model: string, inT: number, outT: number) {
@@ -223,7 +255,7 @@ export async function llm(opts: LLMOptions): Promise<LLMResult> {
 }
 
 async function callAnthropic(opts: LLMOptions, apiKey: string): Promise<LLMResult> {
-  const model = opts.model ?? env.ANTHROPIC_MODEL_DRAFT;
+  const model = opts.model ?? modelForRole("anthropic", opts.role);
   const client = new Anthropic({ apiKey });
 
   let res: Awaited<ReturnType<typeof client.messages.create>>;
@@ -261,7 +293,7 @@ async function callAnthropic(opts: LLMOptions, apiKey: string): Promise<LLMResul
 }
 
 async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> {
-  const model = opts.model ?? env.OPENAI_MODEL_DRAFT;
+  const model = opts.model ?? modelForRole("openai", opts.role);
   const client = new OpenAI({ apiKey });
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -269,14 +301,16 @@ async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> 
     ...opts.messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
-  // 신형 모델(gpt-5.x)은 max_tokens 대신 max_completion_tokens를 쓰고, reasoning에
+  // 신형 모델(gpt-5.x 이상, GPT-6 Astra 포함)은 max_tokens 대신 max_completion_tokens를 쓰고, reasoning에
   // 토큰을 소비하므로 넉넉히 잡아야 본문이 안 잘린다(작은 요청도 최소 1024 확보).
   const maxOut = Math.max(opts.maxTokens ?? 12000, 1024);
-  // 추론형 모델(gpt-5.x / o-시리즈) 추론 강도. 실측 결과 창작 글쓰기에선 high와
+  // 추론형 모델(gpt-5.x 이상·GPT-6 Astra / o-시리즈) 추론 강도. Astra 는 low·medium·high·xhigh·max 수용(2026-10-13 실호출 확인). 실측 결과 창작 글쓰기에선 high와
   // xhigh(최고) 퀄 차이가 사실상 없고 xhigh는 ~2배 느림·비쌈 → 기본 "high"(퀄 동일,
   // 빠르고 저렴, prod 타임아웃 위험 ↓). 필요시 env OPENAI_REASONING_EFFORT=xhigh.
-  const isReasoning = /^(gpt-5|o[0-9])/.test(model);
-  const effort = opts.reasoningEffort ?? process.env.OPENAI_REASONING_EFFORT ?? "high";
+  const isReasoning = /^(gpt-[5-9]|o[0-9])/.test(model);
+  // 검수는 high 고정(교차검증 목적·운영자 결정 2026-10-13), 유사판정 잔무는 low(저비용).
+  const roleEffort = opts.role === "review" ? "high" : opts.role === "review_lite" ? "low" : undefined;
+  const effort = roleEffort ?? opts.reasoningEffort ?? process.env.OPENAI_REASONING_EFFORT ?? "high";
   const reasoning = isReasoning ? { reasoning_effort: effort as "low" | "medium" | "high" | "xhigh" } : {};
   let res: OpenAI.Chat.Completions.ChatCompletion;
   try {

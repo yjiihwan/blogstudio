@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { CalendarClock, BarChart3, Settings, UserCircle, Users } from "lucide-react";
+import { CalendarClock, BarChart3, Settings, UserCircle, Users, Lightbulb } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth";
 
 export default async function MorePage() {
   const user = await getCurrentUser();
   const items = [
+    { href: "/proposals", label: "개선 제안함", icon: <Lightbulb className="size-5" />, desc: "자동 검수가 보낸 가이드·페르소나 개선 제안" },
     { href: "/schedule", label: "스케줄", icon: <CalendarClock className="size-5" />, desc: "발행 예약 및 일정 관리" },
     { href: "/insights", label: "노출 분석", icon: <BarChart3 className="size-5" />, desc: "블로그별 유입·노출 현황" },
     { href: "/settings", label: "설정", icon: <Settings className="size-5" />, desc: "계정 및 앱 설정" },

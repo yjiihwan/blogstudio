@@ -8,14 +8,19 @@ import {
   getStoredUnsplashKeyMasked,
   getStoredPexelsKeyMasked,
   getStoredGoogleAiKeyMasked,
-  getStoredTelegramTokenMasked,
   getUserApiKeyInfo,
   getImageApiKeyInfo,
+  getImageSourceConfigInfo,
   getLLMProviderInfo,
   getGlobalGuideForAdmin,
+  getGuideHistoryForAdmin,
 } from "./actions";
+import { currentModelWiring } from "@/lib/llm";
 import { ImageSourceForm, UserImageSourceForm } from "./image-source-form";
-import { TelegramForm } from "./telegram-form";
+import { AlimtalkCard } from "./alimtalk-card";
+import { getSetupView, latestTestLog, recentLogs } from "@/lib/notify/alimtalk-config";
+import { maskPhone } from "@/lib/notify/alimtalk-core";
+import { getCurrentUser } from "@/lib/auth";
 import { LLMProviderForm } from "./llm-provider-form";
 import { SystemLLMForm } from "./system-llm-form";
 import { GlobalGuideForm } from "./GlobalGuideForm";
@@ -32,6 +37,7 @@ export default async function SettingsPage() {
     userApiKeyInfo,
     imageKeyInfo,
     llmProviderInfo,
+    imageSourceConfig,
   ] = await Promise.all([
     getStoredApiKeyMasked(),
     getStoredSystemOpenAIKeyMasked(),
@@ -41,10 +47,15 @@ export default async function SettingsPage() {
     getUserApiKeyInfo(),
     getImageApiKeyInfo(),
     getLLMProviderInfo(),
+    getImageSourceConfigInfo(),
   ]);
   const isAdmin = userApiKeyInfo.role === "admin";
-  const telegramTokenMasked = isAdmin ? await getStoredTelegramTokenMasked() : null;
+  // 알림톡 연동 뷰(어드민만). 키 원문은 포함되지 않는다(끝 4자리만).
+  const me = isAdmin ? await getCurrentUser() : null;
+  const [alimtalk, alimtalkLogs, latestTest] = isAdmin && me ? await Promise.all([getSetupView(), recentLogs(100), latestTestLog(me.id)]) : [null, [], null];
   const globalGuide = isAdmin ? await getGlobalGuideForAdmin() : null;
+  const guideHistory = isAdmin ? await getGuideHistoryForAdmin() : [];
+  const wiring = currentModelWiring();
   const isUserKeyMode = userApiKeyInfo.mode === "user_key";
   // 어드민 통합 카드의 헤더 배지: 현재 선택된 provider의 시스템 키가 등록돼 있는가
   const selectedSystemKeyConnected =
@@ -84,6 +95,7 @@ export default async function SettingsPage() {
                 initialEnabled={globalGuide.enabled}
                 initialText={globalGuide.text}
                 defaultText={globalGuide.defaultText}
+                history={guideHistory}
               />
             </CardContent>
           </Card>
@@ -113,6 +125,14 @@ export default async function SettingsPage() {
                 initialAnthropicMasked={dbMasked}
                 initialOpenAIMasked={systemOpenAIMasked}
               />
+              {/* 모델 배선(서버 환경변수로 정함 — 화면에서 바꾸는 칸은 없음) */}
+              <div className="mt-4 rounded-lg bg-paper-100 px-4 py-3 text-xs text-ink-600 space-y-1" data-testid="model-wiring">
+                <div className="font-semibold text-ink-800">현재 모델 배선 (ChatGPT 기준)</div>
+                <div>글 작성·다듬기: <code>{wiring.draft}</code></div>
+                <div>자동 검수·설정 개선안: <code>{wiring.review}</code> (추론 강도 high — 글 작성과 다른 모델로 교차 검증)</div>
+                <div>제안 유사판정(같은 문제인지): <code>{wiring.reviewLite}</code> (저비용)</div>
+                <div className="text-ink-400">Claude 선택 시: 작성 {wiring.anthropicDraft} · 검수 {wiring.anthropicReview}. 변경은 서버 환경변수 OPENAI_MODEL_DRAFT / OPENAI_MODEL_REVIEW / OPENAI_MODEL_REVIEW_LITE.</div>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -183,12 +203,14 @@ export default async function SettingsPage() {
                 <SystemChip />
               </div>
               <p className="text-sm text-ink-600 leading-relaxed mb-4">
-                전체 시스템에서 공유하는 이미지 API 키입니다. 시스템 키 모드 계정이 함께 사용합니다.
+                전체 시스템에서 공유하는 이미지 API 키와 사용 여부·시도 순서·자동 검증 설정입니다. 시스템 키 모드 계정이 함께 사용합니다.
               </p>
               <ImageSourceForm
                 unsplashMasked={unsplashMasked}
                 pexelsMasked={pexelsMasked}
                 googleAiMasked={googleAiMasked}
+                openaiKeyPresent={imageSourceConfig.systemOpenAIKeyPresent}
+                config={imageSourceConfig.system}
               />
             </CardContent>
           </Card>
@@ -226,28 +248,18 @@ export default async function SettingsPage() {
                 unsplashMasked={imageKeyInfo.unsplashMasked}
                 pexelsMasked={imageKeyInfo.pexelsMasked}
                 googleAiMasked={imageKeyInfo.googleAiMasked}
+                openaiKeyPresent={imageSourceConfig.userOpenAIKeyPresent}
+                config={imageSourceConfig.user}
               />
             </CardContent>
           </Card>
         )}
 
-        {/* ── 텔레그램 Bot Token (어드민) ──────────────────────── */}
-        {isAdmin && (
+        {/* ── 알림 채널: 카카오 알림톡 셀프 연동 (어드민) ───────── */}
+        {isAdmin && alimtalk && (
           <Card>
             <CardContent>
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="font-bold text-base">알림 채널 (시스템 Bot Token)</h2>
-                {telegramTokenMasked ? (
-                  <Badge tone="leaf">Bot Token 등록됨</Badge>
-                ) : (
-                  <Badge tone="neutral">미등록</Badge>
-                )}
-              </div>
-              <p className="text-sm text-ink-600 leading-relaxed mb-4">
-                전체 시스템이 공유하는 텔레그램 Bot Token입니다. 초안 준비됨·반려·사진 요청 알림이 이 봇으로 발송됩니다.
-                알림 수신 대상은 각 계정의 <strong>내 계정 → 텔레그램 알림</strong>에서 Chat ID를 등록해 설정합니다.
-              </p>
-              <TelegramForm tokenMasked={telegramTokenMasked} />
+              <AlimtalkCard setup={alimtalk} logs={alimtalkLogs} adminPhoneMasked={me?.phone ? maskPhone(me.phone) : null} latestTest={latestTest} />
             </CardContent>
           </Card>
         )}

@@ -55,7 +55,8 @@ export default async function PhotosPage() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <Badge tone="outline">{r.draft.blog.displayName}</Badge>
+                      {/* 블로그가 지워진 고아 초안이면 null — 페이지 전체가 500 나지 않게 방어 */}
+                      <Badge tone="outline">{r.draft.blog?.displayName ?? "(블로그 없음)"}</Badge>
                       <span className="text-[11px] text-ink-400">
                         {relativeTime(r.createdAt)}
                       </span>

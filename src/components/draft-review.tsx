@@ -11,7 +11,6 @@ import {
   Sparkles,
   ClipboardCopy,
   ExternalLink,
-  AlertTriangle,
   Save,
   ChevronDown,
   Download,
@@ -19,6 +18,7 @@ import {
 } from "lucide-react";
 import { renderMarkdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
+import { ReviewVerdictCard, type ReviewInfo } from "@/components/review-verdict";
 
 export type ReviewProps = {
   draftId: string;
@@ -32,14 +32,8 @@ export type ReviewProps = {
     needsUserShot?: boolean;
   }>;
   imageUrls: Record<number, string>;
-  seo: {
-    score: number;
-    checks: Array<{ ok: boolean; label: string; detail?: string }>;
-  };
-  human: {
-    score: number;
-    checks: Array<{ ok: boolean; label: string; detail?: string }>;
-  };
+  /** 모델 검수 결과(A안) — 점수 대신 판정·사유·주의 표시 */
+  review: ReviewInfo;
   naverBlogId: string;
   blogName: string;
   status: string;
@@ -492,17 +486,8 @@ export function DraftReview(p: ReviewProps) {
           </CardContent>
         </Card>
 
-        {/* Scores */}
-        <ScoreCard
-          label="SEO 점수"
-          score={p.seo.score}
-          checks={p.seo.checks}
-        />
-        <ScoreCard
-          label="휴먼 톤 점수"
-          score={p.human.score}
-          checks={p.human.checks}
-        />
+        {/* 자동 검수 판정 */}
+        <ReviewVerdictCard review={p.review} />
       </aside>
     </div>
   );
@@ -525,56 +510,5 @@ function Tab({
     >
       {children}
     </button>
-  );
-}
-
-function ScoreCard({
-  label,
-  score,
-  checks,
-}: {
-  label: string;
-  score: number;
-  checks: Array<{ ok: boolean; label: string; detail?: string }>;
-}) {
-  const tone =
-    score >= 85 ? "leaf-500" : score >= 65 ? "amber-500" : "accent-600";
-  return (
-    <Card>
-      <CardContent>
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-sm font-bold">{label}</div>
-          <div className={`text-xl font-black text-${tone}`}>{score}</div>
-        </div>
-        <ul className="space-y-1.5">
-          {checks.map((c, i) => (
-            <li key={i} className="flex items-start gap-2 text-[11px]">
-              <span
-                className={cn(
-                  "mt-0.5 size-3.5 shrink-0",
-                  c.ok ? "text-leaf-500" : "text-accent-600"
-                )}
-              >
-                {c.ok ? (
-                  <CheckCircle2 className="size-3.5" />
-                ) : (
-                  <AlertTriangle className="size-3.5" />
-                )}
-              </span>
-              <span className="flex-1">
-                <span
-                  className={c.ok ? "text-ink-700" : "text-ink-900 font-semibold"}
-                >
-                  {c.label}
-                </span>
-                {c.detail && (
-                  <span className="text-ink-400 ml-1">— {c.detail}</span>
-                )}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
   );
 }
