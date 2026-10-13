@@ -19,9 +19,7 @@ export default async function SignupPage({
     <div className="min-h-screen bg-paper-100 paper-texture flex items-center justify-center px-6 py-16">
       <div className="w-full max-w-[420px]">
         <div className="flex items-center gap-3 mb-10 justify-center">
-          <div className="size-9 rounded-md bg-ink-900 text-paper-100 flex items-center justify-center font-serif text-base font-black">
-            S
-          </div>
+          <img src="/brand/blogstudio_symbol_color.svg" alt="" aria-hidden="true" className="size-9 rounded-md" />
           <div className="font-bold tracking-tight text-lg">Blog Studio</div>
         </div>
 
