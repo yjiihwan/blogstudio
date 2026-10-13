@@ -56,8 +56,9 @@ export async function runModelReview(opts: {
   const calls: ReviewCallMeta[] = [];
   const personaText = personaPreamble(opts.persona);
   const bodyChars = opts.bodyMd.replace(/\s+/g, "").length;
-  // 수정 전문 + 추론 토큰을 담을 천장(한국어 ~2.2토큰/자). 작은 글도 JSON·추론 여유 확보.
-  const maxTokens = Math.min(24000, Math.max(6000, Math.round(bodyChars * 2.2) + 3000));
+  // 수정 전문 + 추론 토큰(high)을 담을 천장(한국어 ~2.2토큰/자). 추론 토큰이 천장을 먹어 JSON 이 잘리면
+  // 형식 재요청 1회가 더 나가므로(스테이징 실측: 865자 글에서 1회 발생) 바닥을 넉넉히 둔다. 비용은 실제 사용분만.
+  const maxTokens = Math.min(32000, Math.max(14000, Math.round(bodyChars * 2.2) + 6000));
   let model = "";
 
   const failed = (reason: string, finalBody = opts.bodyMd): ModelReviewResult => {
