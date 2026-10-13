@@ -9,6 +9,12 @@ import { eq } from "drizzle-orm";
 import { decryptApiKey, maskApiKey, tryEncryptApiKey } from "@/lib/crypto";
 import { env } from "@/lib/env";
 import { ensureWebhookSecret, clearBotUsernameCache } from "@/lib/telegram-link";
+import {
+  IMAGE_SOURCE_CONFIG_SETTING_KEY,
+  normalizeImageSourceConfig,
+  type ImageSourceConfig,
+} from "@/lib/image-source-config";
+import { getSystemImageSourceConfig, resolveOpenAIKey } from "@/lib/image-keys";
 
 const SETTINGS_ANTHROPIC_KEY = "anthropic_api_key";
 const SETTINGS_OPENAI_KEY = "openai_api_key";
@@ -750,4 +756,61 @@ export async function testUserGoogleAiKeyAction(): Promise<{ ok: boolean; messag
   } catch (err) {
     return { ok: false, message: `연결 실패: ${err instanceof Error ? err.message.slice(0, 60) : String(err)}` };
   }
+}
+
+// ── 이미지 소스 사용여부·시도순서·자동검증 설정 ─────────────────────────────
+
+export async function getImageSourceConfigInfo(): Promise<{
+  system: ImageSourceConfig;
+  user: ImageSourceConfig;
+  /** 시스템 OpenAI 키 존재 여부(시스템 카드의 gpt-image-1·심사 가능 여부 표시용) */
+  systemOpenAIKeyPresent: boolean;
+  /** 현재 계정 기준 OpenAI 키 존재 여부(유저 키 모드면 개인 키, 아니면 시스템 키) */
+  userOpenAIKeyPresent: boolean;
+}> {
+  const user = await requireUser();
+  const [system, systemOpenAI, userOpenAI] = await Promise.all([
+    getSystemImageSourceConfig(),
+    resolveSystemApiKey("openai"),
+    resolveOpenAIKey(user.id),
+  ]);
+  return {
+    system,
+    user: normalizeImageSourceConfig(user.imageSourceConfigJson),
+    systemOpenAIKeyPresent: !!systemOpenAI,
+    userOpenAIKeyPresent: !!userOpenAI,
+  };
+}
+
+export async function saveImageSourceConfigAction(
+  raw: unknown
+): Promise<{ ok: true; config: ImageSourceConfig } | { ok: false; error: string }> {
+  await requireAdmin();
+  const config = normalizeImageSourceConfig(raw);
+  const valueJson = JSON.stringify(config);
+  await db
+    .insert(schema.settings)
+    .values({ key: IMAGE_SOURCE_CONFIG_SETTING_KEY, valueJson })
+    .onConflictDoUpdate({
+      target: schema.settings.key,
+      set: { valueJson, updatedAt: new Date().toISOString() },
+    });
+  revalidatePath("/settings");
+  return { ok: true, config };
+}
+
+export async function saveUserImageSourceConfigAction(
+  raw: unknown
+): Promise<{ ok: true; config: ImageSourceConfig } | { ok: false; error: string }> {
+  const user = await requireUser();
+  if ((user.imageApiKeyMode ?? "system") !== "user_key") {
+    return { ok: false, error: "이미지 키 모드가 유저 키 모드가 아닙니다." };
+  }
+  const config = normalizeImageSourceConfig(raw);
+  await db
+    .update(schema.users)
+    .set({ imageSourceConfigJson: JSON.stringify(config), updatedAt: new Date().toISOString() })
+    .where(eq(schema.users.id, user.id));
+  revalidatePath("/settings");
+  return { ok: true, config };
 }

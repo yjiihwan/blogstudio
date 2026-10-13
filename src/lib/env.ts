@@ -31,6 +31,9 @@ export const env = {
   // 단가는 gpt-5.5 의 2배($10/$50 per 1M) — llm/index.ts PRICES_USD_PER_M 와 함께 갱신할 것.
   OPENAI_MODEL_DRAFT: process.env.OPENAI_MODEL_DRAFT ?? "gpt-6-astra",
   OPENAI_MODEL_REVIEW: process.env.OPENAI_MODEL_REVIEW ?? "gpt-5.5-mini",
+  // 이미지 품질·묘사 일치 심사(비전) 모델. 지시된 gpt-5.5-mini 는 OpenAI 모델 목록에 없어(404)
+  // 비전 지원 mini급 중 가장 저렴한 gpt-5.4-mini($0.75/$4.50 per 1M) 를 기본값으로 둔다.
+  OPENAI_MODEL_IMAGE_JUDGE: process.env.OPENAI_MODEL_IMAGE_JUDGE ?? "gpt-5.4-mini",
   UNSPLASH_ACCESS_KEY: process.env.UNSPLASH_ACCESS_KEY ?? "",
   PEXELS_API_KEY: process.env.PEXELS_API_KEY ?? "",
   NAVER_OPENAPI_CLIENT_ID: process.env.NAVER_OPENAPI_CLIENT_ID ?? "",

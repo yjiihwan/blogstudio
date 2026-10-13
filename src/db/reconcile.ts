@@ -27,6 +27,8 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
     { name: "unsplash_key", ddl: "`unsplash_key` text" },
     { name: "pexels_key", ddl: "`pexels_key` text" },
     { name: "google_ai_key", ddl: "`google_ai_key` text" },
+    // 이미지 소스 사용여부·순서·검증 설정(0012). null = 기본값(전부 사용·기존 순서).
+    { name: "image_source_config_json", ddl: "`image_source_config_json` text" },
     { name: "telegram_chat_id", ddl: "`telegram_chat_id` text" },
     { name: "telegram_link_code", ddl: "`telegram_link_code` text" },
     { name: "telegram_link_expires", ddl: "`telegram_link_expires` text" },

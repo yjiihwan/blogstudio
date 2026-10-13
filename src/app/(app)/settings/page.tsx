@@ -11,6 +11,7 @@ import {
   getStoredTelegramTokenMasked,
   getUserApiKeyInfo,
   getImageApiKeyInfo,
+  getImageSourceConfigInfo,
   getLLMProviderInfo,
   getGlobalGuideForAdmin,
 } from "./actions";
@@ -32,6 +33,7 @@ export default async function SettingsPage() {
     userApiKeyInfo,
     imageKeyInfo,
     llmProviderInfo,
+    imageSourceConfig,
   ] = await Promise.all([
     getStoredApiKeyMasked(),
     getStoredSystemOpenAIKeyMasked(),
@@ -41,6 +43,7 @@ export default async function SettingsPage() {
     getUserApiKeyInfo(),
     getImageApiKeyInfo(),
     getLLMProviderInfo(),
+    getImageSourceConfigInfo(),
   ]);
   const isAdmin = userApiKeyInfo.role === "admin";
   const telegramTokenMasked = isAdmin ? await getStoredTelegramTokenMasked() : null;
@@ -183,12 +186,14 @@ export default async function SettingsPage() {
                 <SystemChip />
               </div>
               <p className="text-sm text-ink-600 leading-relaxed mb-4">
-                전체 시스템에서 공유하는 이미지 API 키입니다. 시스템 키 모드 계정이 함께 사용합니다.
+                전체 시스템에서 공유하는 이미지 API 키와 사용 여부·시도 순서·자동 검증 설정입니다. 시스템 키 모드 계정이 함께 사용합니다.
               </p>
               <ImageSourceForm
                 unsplashMasked={unsplashMasked}
                 pexelsMasked={pexelsMasked}
                 googleAiMasked={googleAiMasked}
+                openaiKeyPresent={imageSourceConfig.systemOpenAIKeyPresent}
+                config={imageSourceConfig.system}
               />
             </CardContent>
           </Card>
@@ -226,6 +231,8 @@ export default async function SettingsPage() {
                 unsplashMasked={imageKeyInfo.unsplashMasked}
                 pexelsMasked={imageKeyInfo.pexelsMasked}
                 googleAiMasked={imageKeyInfo.googleAiMasked}
+                openaiKeyPresent={imageSourceConfig.userOpenAIKeyPresent}
+                config={imageSourceConfig.user}
               />
             </CardContent>
           </Card>

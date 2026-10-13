@@ -85,6 +85,13 @@
       "when": 1785820599666,
       "tag": "0011_style_metrics",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791857328541,
+      "tag": "0012_image_source_config",
+      "breakpoints": true
     }
   ]
 }
