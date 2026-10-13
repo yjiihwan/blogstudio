@@ -29,6 +29,9 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
     { name: "google_ai_key", ddl: "`google_ai_key` text" },
     // 이미지 소스 사용여부·순서·검증 설정(0012). null = 기본값(전부 사용·기존 순서).
     { name: "image_source_config_json", ddl: "`image_source_config_json` text" },
+    // 카카오 알림톡 수신 번호·알림 켬끔(0013). notify_enabled 는 기존 행도 «켬»으로 백필.
+    { name: "phone", ddl: "`phone` text" },
+    { name: "notify_enabled", ddl: "`notify_enabled` integer NOT NULL DEFAULT 1" },
     { name: "telegram_chat_id", ddl: "`telegram_chat_id` text" },
     { name: "telegram_link_code", ddl: "`telegram_link_code` text" },
     { name: "telegram_link_expires", ddl: "`telegram_link_expires` text" },
@@ -58,6 +61,20 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
  * CREATE TABLE IF NOT EXISTS 라 멱등·비파괴다. DDL 은 drizzle 마이그레이션 원문과 동일하게 유지할 것.
  */
 const EXPECTED_TABLES: Array<{ name: string; ddl: string }> = [
+  {
+    name: "alimtalk_logs", // drizzle/0013_alimtalk.sql
+    ddl: `CREATE TABLE IF NOT EXISTS \`alimtalk_logs\` (
+      \`id\` text PRIMARY KEY NOT NULL,
+      \`user_id\` text,
+      \`event\` text NOT NULL,
+      \`to\` text DEFAULT '' NOT NULL,
+      \`template_code\` text DEFAULT '' NOT NULL,
+      \`status\` text NOT NULL,
+      \`provider_message_id\` text,
+      \`error\` text,
+      \`created_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL
+    )`,
+  },
   {
     name: "style_samples", // drizzle/0010_style_samples.sql
     ddl: `CREATE TABLE IF NOT EXISTS \`style_samples\` (

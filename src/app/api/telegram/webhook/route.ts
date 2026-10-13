@@ -1,3 +1,4 @@
+// ⚠️ 10-13 알림톡 전환으로 미사용 — 화면·호출처에서 제거됨. 되돌리기용으로 파일·users.telegram_* 컬럼은 유지(src/lib/notify/* 참고).
 import { NextRequest, NextResponse } from "next/server";
 import { consumeLinkCode, getWebhookSecret } from "@/lib/telegram-link";
 import { sendTelegramRawMessage } from "@/lib/telegram";

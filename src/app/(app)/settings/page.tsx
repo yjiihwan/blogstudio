@@ -8,7 +8,6 @@ import {
   getStoredUnsplashKeyMasked,
   getStoredPexelsKeyMasked,
   getStoredGoogleAiKeyMasked,
-  getStoredTelegramTokenMasked,
   getUserApiKeyInfo,
   getImageApiKeyInfo,
   getImageSourceConfigInfo,
@@ -16,7 +15,10 @@ import {
   getGlobalGuideForAdmin,
 } from "./actions";
 import { ImageSourceForm, UserImageSourceForm } from "./image-source-form";
-import { TelegramForm } from "./telegram-form";
+import { AlimtalkCard } from "./alimtalk-card";
+import { getSetupView, latestTestLog, recentLogs } from "@/lib/notify/alimtalk-config";
+import { maskPhone } from "@/lib/notify/alimtalk-core";
+import { getCurrentUser } from "@/lib/auth";
 import { LLMProviderForm } from "./llm-provider-form";
 import { SystemLLMForm } from "./system-llm-form";
 import { GlobalGuideForm } from "./GlobalGuideForm";
@@ -46,7 +48,9 @@ export default async function SettingsPage() {
     getImageSourceConfigInfo(),
   ]);
   const isAdmin = userApiKeyInfo.role === "admin";
-  const telegramTokenMasked = isAdmin ? await getStoredTelegramTokenMasked() : null;
+  // 알림톡 연동 뷰(어드민만). 키 원문은 포함되지 않는다(끝 4자리만).
+  const me = isAdmin ? await getCurrentUser() : null;
+  const [alimtalk, alimtalkLogs, latestTest] = isAdmin && me ? await Promise.all([getSetupView(), recentLogs(100), latestTestLog(me.id)]) : [null, [], null];
   const globalGuide = isAdmin ? await getGlobalGuideForAdmin() : null;
   const isUserKeyMode = userApiKeyInfo.mode === "user_key";
   // 어드민 통합 카드의 헤더 배지: 현재 선택된 provider의 시스템 키가 등록돼 있는가
@@ -238,23 +242,11 @@ export default async function SettingsPage() {
           </Card>
         )}
 
-        {/* ── 텔레그램 Bot Token (어드민) ──────────────────────── */}
-        {isAdmin && (
+        {/* ── 알림 채널: 카카오 알림톡 셀프 연동 (어드민) ───────── */}
+        {isAdmin && alimtalk && (
           <Card>
             <CardContent>
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="font-bold text-base">알림 채널 (시스템 Bot Token)</h2>
-                {telegramTokenMasked ? (
-                  <Badge tone="leaf">Bot Token 등록됨</Badge>
-                ) : (
-                  <Badge tone="neutral">미등록</Badge>
-                )}
-              </div>
-              <p className="text-sm text-ink-600 leading-relaxed mb-4">
-                전체 시스템이 공유하는 텔레그램 Bot Token입니다. 초안 준비됨·반려·사진 요청 알림이 이 봇으로 발송됩니다.
-                알림 수신 대상은 각 계정의 <strong>내 계정 → 텔레그램 알림</strong>에서 Chat ID를 등록해 설정합니다.
-              </p>
-              <TelegramForm tokenMasked={telegramTokenMasked} />
+              <AlimtalkCard setup={alimtalk} logs={alimtalkLogs} adminPhoneMasked={me?.phone ? maskPhone(me.phone) : null} latestTest={latestTest} />
             </CardContent>
           </Card>
         )}

@@ -43,6 +43,10 @@ export const users = sqliteTable("users", {
   googleAiKey: text("google_ai_key"),
   // 이미지 소스 사용여부·시도순서·자동검증 설정(JSON, lib/image-source-config.ts). null = 기본값(전부 사용).
   imageSourceConfigJson: text("image_source_config_json"),
+  // 카카오 알림톡 수신 번호(숫자만, 01012345678). unique 아님 — 한 사람이 계정 여러 개일 수 있음(2026-10-13 알림톡 전환).
+  phone: text("phone"),
+  notifyEnabled: integer("notify_enabled", { mode: "boolean" }).notNull().default(true),
+  // ── 텔레그램(10-13 알림톡 전환으로 미사용 · 되돌리기용으로 컬럼 유지) ──
   telegramChatId: text("telegram_chat_id"),
   // 일회성 텔레그램 연결코드(딥링크 /start <code>)와 만료시각(ISO). 연결 완료 시 비운다.
   telegramLinkCode: text("telegram_link_code"),
@@ -401,6 +405,21 @@ export const styleSamples = sqliteTable("style_samples", {
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
   ...timestamps,
+});
+
+/* =========================================================================
+   ALIMTALK LOGS — 카카오 알림톡 발송 이력(드라이런·발송·실패). 관리자 «발송 이력» 탭 + 실패 배너 집계
+   ========================================================================= */
+export const alimtalkLogs = sqliteTable("alimtalk_logs", {
+  id: id(),
+  userId: text("user_id"),
+  event: text("event").notNull(),
+  to: text("to").notNull().default(""),
+  templateCode: text("template_code").notNull().default(""),
+  status: text("status", { enum: ["dry_run", "sent", "sms_sent", "failed", "skipped"] }).notNull(),
+  providerMessageId: text("provider_message_id"),
+  error: text("error"),
+  createdAt: text("created_at").notNull().default(sql`(CURRENT_TIMESTAMP)`),
 });
 
 /* =========================================================================

@@ -26,16 +26,18 @@ export interface PublishOutcome {
  */
 export async function runPublish(
   req: PublishRequest,
-  hooks: { notify: () => Promise<void> }
+  hooks: { notify: (ctx: { dryRun: boolean }) => Promise<void> }
 ): Promise<PublishOutcome> {
   if (isPublishDryRun()) {
     const note = `[DRY-RUN] 모의발행 — 실블로그 업로드/외부알림 없음 (draft=${req.draftId})`;
     console.log(`[publish] ${note} title=${JSON.stringify(req.title)}`);
+    // 알림톡 전환(10-13): dryRun 플래그를 넘겨 알림 모듈이 «기록만» 남기게 한다(외부 발송은 모듈이 차단).
+    await hooks.notify({ dryRun: true }).catch(() => {});
     return { mode: "dry_run", method: "dry_run", notified: false, note };
   }
 
   // LIVE: 실제 발행(현재=수동 붙여넣기 방식) — 외부 알림 발송. 알림 실패는 발행을 막지 않는다.
-  await hooks.notify().catch(() => {});
+  await hooks.notify({ dryRun: false }).catch(() => {});
   const note = `[LIVE] 발행 완료 (draft=${req.draftId})`;
   console.log(`[publish] ${note}`);
   return { mode: "live", method: "manual_paste", notified: true, note };

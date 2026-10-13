@@ -92,6 +92,13 @@
       "when": 1791857328541,
       "tag": "0012_image_source_config",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1791860676775,
+      "tag": "0013_alimtalk",
+      "breakpoints": true
     }
   ]
 }

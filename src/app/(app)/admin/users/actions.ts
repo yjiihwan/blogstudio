@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db, schema } from "@/db/client";
 import { eq } from "drizzle-orm";
 import { requireAdmin, hashPassword } from "@/lib/auth";
-import { sendTelegramToUser } from "@/lib/telegram";
+import { notifyUser } from "@/lib/notify/notify";
 import { env } from "@/lib/env";
 
 export async function changeRoleAction(userId: string, newRole: "admin" | "user") {
@@ -34,28 +34,24 @@ export async function deleteUserAction(userId: string) {
 
 export async function approveUserAction(userId: string) {
   await requireAdmin();
+  const approvedName = (await db.query.users.findFirst({ where: eq(schema.users.id, userId) }))?.name ?? "";
   await db
     .update(schema.users)
     .set({ status: "approved" })
     .where(eq(schema.users.id, userId));
   revalidatePath("/admin/users");
-  sendTelegramToUser(
-    userId,
-    `✅ 계정이 승인되었습니다!\n이제 로그인하실 수 있습니다.\n${env.APP_URL}/login`
-  ).catch(() => null);
+  notifyUser(userId, "approved", { 이름: approvedName, 로그인주소: `${env.APP_URL}/login` }).catch(() => null);
 }
 
 export async function rejectUserAction(userId: string) {
   await requireAdmin();
+  const rejectedName = (await db.query.users.findFirst({ where: eq(schema.users.id, userId) }))?.name ?? "";
   await db
     .update(schema.users)
     .set({ status: "rejected", isActive: false })
     .where(eq(schema.users.id, userId));
   revalidatePath("/admin/users");
-  sendTelegramToUser(
-    userId,
-    `❌ 계정 승인이 거부되었습니다.\n자세한 내용은 관리자에게 문의하세요.`
-  ).catch(() => null);
+  notifyUser(userId, "rejected", { 이름: rejectedName }).catch(() => null);
 }
 
 /**
@@ -84,11 +80,8 @@ export async function resetPasswordAction(
     .set({ passwordHash: newHash, updatedAt: new Date().toISOString() })
     .where(eq(schema.users.id, userId));
 
-  // 사용자에게 텔레그램 연결돼 있으면 안내(임시 비번 자체는 보안상 텔레그램에 안 싣고 안내만)
-  sendTelegramToUser(
-    userId,
-    `🔑 관리자가 비밀번호를 재설정했습니다.\n관리자에게 임시 비밀번호를 받아 로그인 후 [내 계정]에서 변경해주세요.`
-  ).catch(() => null);
+  // 사용자 휴대폰으로 알림톡 안내(임시 비번 자체는 보안상 싣지 않고 안내만)
+  notifyUser(userId, "password_reset", {}).catch(() => null);
 
   revalidatePath("/admin/users");
   return { ok: true, tempPassword };
