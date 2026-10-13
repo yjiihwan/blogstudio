@@ -75,7 +75,7 @@ export type LLMOptions = {
   mockResponder?: (msgs: LLMMessage[]) => string;
   /** If provided, resolves the API key and provider from this user's settings. */
   callerUserId?: string;
-  /** 추론형 모델(gpt-5.x) 추론 강도 override. 구조적 단계(주제·아웃라인)는 "low"로
+  /** 추론형 모델(gpt-5.x 이상·o-시리즈) 추론 강도 override. 구조적 단계(주제·아웃라인)는 "low"로
    *  낮춰 속도↑(프로즈 퀄 무관), 창작 단계(본문·사람화)는 기본(high) 유지. */
   reasoningEffort?: "low" | "medium" | "high" | "xhigh";
 };
@@ -96,6 +96,10 @@ const PRICES_USD_PER_M: Record<string, { in: number; out: number }> = {
   "claude-haiku-4-5-20251001": { in: 0.8, out: 4 },
   "gpt-4o": { in: 5, out: 15 },
   "gpt-4o-mini": { in: 0.15, out: 0.6 },
+  // OpenAI 공식 단가(developers.openai.com/api/docs/pricing, 2026-10-13 확인, 표준 단가·272K 입력 이하).
+  // 표에 없는 모델은 claude-sonnet 단가로 집계되므로 모델 전환 시 반드시 추가.
+  "gpt-5.5": { in: 5, out: 30 },
+  "gpt-6-astra": { in: 10, out: 50 },
 };
 const USD_KRW = 1380;
 
@@ -269,13 +273,13 @@ async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> 
     ...opts.messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
-  // 신형 모델(gpt-5.x)은 max_tokens 대신 max_completion_tokens를 쓰고, reasoning에
+  // 신형 모델(gpt-5.x 이상, GPT-6 Astra 포함)은 max_tokens 대신 max_completion_tokens를 쓰고, reasoning에
   // 토큰을 소비하므로 넉넉히 잡아야 본문이 안 잘린다(작은 요청도 최소 1024 확보).
   const maxOut = Math.max(opts.maxTokens ?? 12000, 1024);
-  // 추론형 모델(gpt-5.x / o-시리즈) 추론 강도. 실측 결과 창작 글쓰기에선 high와
+  // 추론형 모델(gpt-5.x 이상·GPT-6 Astra / o-시리즈) 추론 강도. Astra 는 low·medium·high·xhigh·max 수용(2026-10-13 실호출 확인). 실측 결과 창작 글쓰기에선 high와
   // xhigh(최고) 퀄 차이가 사실상 없고 xhigh는 ~2배 느림·비쌈 → 기본 "high"(퀄 동일,
   // 빠르고 저렴, prod 타임아웃 위험 ↓). 필요시 env OPENAI_REASONING_EFFORT=xhigh.
-  const isReasoning = /^(gpt-5|o[0-9])/.test(model);
+  const isReasoning = /^(gpt-[5-9]|o[0-9])/.test(model);
   const effort = opts.reasoningEffort ?? process.env.OPENAI_REASONING_EFFORT ?? "high";
   const reasoning = isReasoning ? { reasoning_effort: effort as "low" | "medium" | "high" | "xhigh" } : {};
   let res: OpenAI.Chat.Completions.ChatCompletion;

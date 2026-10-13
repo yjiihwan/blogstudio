@@ -26,9 +26,10 @@ export const env = {
   ANTHROPIC_MODEL_REVIEW:
     process.env.ANTHROPIC_MODEL_REVIEW ?? "claude-haiku-4-5-20251001",
   OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
-  // 글 생성·재작성·사람화 모델. gpt-4o는 구형이라 한국어 블로그 퀄이 낮음 →
-  // 최신 플래그십 gpt-5.5로 상향(퀄 대폭 개선, 자연스러움 ↑).
-  OPENAI_MODEL_DRAFT: process.env.OPENAI_MODEL_DRAFT ?? "gpt-5.5",
+  // 글 생성·재작성·사람화 모델. gpt-4o(구형) → gpt-5.5 → GPT-6 Astra(2026-10 전환).
+  // Astra 는 Chat Completions 에서 max_completion_tokens·reasoning_effort 를 받고 max_tokens 는 거부(400).
+  // 단가는 gpt-5.5 의 2배($10/$50 per 1M) — llm/index.ts PRICES_USD_PER_M 와 함께 갱신할 것.
+  OPENAI_MODEL_DRAFT: process.env.OPENAI_MODEL_DRAFT ?? "gpt-6-astra",
   OPENAI_MODEL_REVIEW: process.env.OPENAI_MODEL_REVIEW ?? "gpt-5.5-mini",
   UNSPLASH_ACCESS_KEY: process.env.UNSPLASH_ACCESS_KEY ?? "",
   PEXELS_API_KEY: process.env.PEXELS_API_KEY ?? "",
