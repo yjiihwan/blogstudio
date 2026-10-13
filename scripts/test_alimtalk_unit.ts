@@ -38,8 +38,8 @@ function eq<T>(name: string, got: T, want: T) {
 }
 const ok = (name: string, cond: boolean) => eq(name, cond, true);
 
-/* ── 템플릿 5종 ── */
-eq("템플릿 5종 키", Object.keys(TEMPLATES).sort(), [...NOTIFY_EVENTS].sort());
+/* ── 템플릿 6종 ── */
+eq("템플릿 6종 키", Object.keys(TEMPLATES).sort(), [...NOTIFY_EVENTS].sort());
 for (const e of NOTIFY_EVENTS) {
   const t = TEMPLATES[e];
   const inText = [...t.text.matchAll(/#\{([^}]+)\}/g)].map((m) => m[1]).sort();
@@ -67,7 +67,7 @@ eq("가림", maskPhone("01012345678"), "010-****-5678");
 const envNone = parseAlimtalkEnv({});
 eq("env 미설정 → dryrun", envNone.vendor, "dryrun");
 eq("env 모드 사유", decideEnvSendMode(envNone).mode, "dryrun");
-const envFull = parseAlimtalkEnv({ ALIMTALK_PROVIDER: "solapi", ALIMTALK_API_KEY: "k", ALIMTALK_API_SECRET: "s", ALIMTALK_SENDER_KEY: "pf", ALIMTALK_SENDER_PHONE: "0212345678", ALIMTALK_TPL_SIGNUP_PENDING: "a", ALIMTALK_TPL_APPROVED: "b", ALIMTALK_TPL_REJECTED: "c", ALIMTALK_TPL_PASSWORD_RESET: "d", ALIMTALK_TPL_PUBLISH_DONE: "e" });
+const envFull = parseAlimtalkEnv({ ALIMTALK_PROVIDER: "solapi", ALIMTALK_API_KEY: "k", ALIMTALK_API_SECRET: "s", ALIMTALK_SENDER_KEY: "pf", ALIMTALK_SENDER_PHONE: "0212345678", ALIMTALK_TPL_SIGNUP_PENDING: "a", ALIMTALK_TPL_APPROVED: "b", ALIMTALK_TPL_REJECTED: "c", ALIMTALK_TPL_PASSWORD_RESET: "d", ALIMTALK_TPL_PUBLISH_DONE: "e", ALIMTALK_TPL_IMPROVEMENT_PROPOSAL: "f" });
 eq("env 전부 → live", decideEnvSendMode(envFull), { mode: "live" });
 const envPartial = parseAlimtalkEnv({ ALIMTALK_PROVIDER: "solapi", ALIMTALK_API_KEY: "k", ALIMTALK_API_SECRET: "s", ALIMTALK_SENDER_KEY: "pf", ALIMTALK_SENDER_PHONE: "02", ALIMTALK_TPL_APPROVED: "b" });
 const pm = decideEnvSendMode(envPartial);
@@ -103,7 +103,7 @@ eq("코드 빈칸 허용", checkTemplateCode("  "), { ok: true, value: "" });
 eq("코드 trim", checkTemplateCode(" KA01TP_ab-1.2 "), { ok: true, value: "KA01TP_ab-1.2" });
 ok("코드 한글 거부", !checkTemplateCode("템플릿").ok);
 const tp = parseTemplates(JSON.stringify({ approved: { code: "TPL-OK", state: "approved", fingerprint: "fp", checkedAt: "t" }, bogus: { code: "x" } }));
-eq("templates 파싱 — 5종 전부 존재", Object.keys(tp).sort(), [...NOTIFY_EVENTS].sort());
+eq("templates 파싱 — 6종 전부 존재", Object.keys(tp).sort(), [...NOTIFY_EVENTS].sort());
 eq("templates 파싱 값", tp.approved.code, "TPL-OK");
 eq("templates 미지정은 빈칸", tp.rejected.code, "");
 ok("templateReady 승인+같은 fp", templateReady(tp.approved, true, "fp"));
@@ -129,10 +129,10 @@ eq("→ 4단계", firstOpenStep(cfg, c2), 4);
 const partialTpl = allTpl();
 partialTpl.publish_done = { code: "TPL-PENDING", state: "pending", name: "", checkedAt: "t", fingerprint: FP };
 const c3 = buildChecklist({ config: cfg, templates: partialTpl, status: connectedOk, fingerprint: FP });
-eq("템플릿 4/5 → 미완", c3[2].ok, false);
-ok("템플릿 detail 4/5", c3[2].detail.includes("4/5"));
+eq("템플릿 5/6 → 미완", c3[2].ok, false);
+ok("템플릿 detail 5/6", c3[2].detail.includes("5/6"));
 const c4 = buildChecklist({ config: cfg, templates: allTpl(), status: connectedOk, fingerprint: FP });
-eq("템플릿 5/5 → 완료", c4.map((x) => x.ok), [true, true, true, false]);
+eq("템플릿 6/6 → 완료", c4.map((x) => x.ok), [true, true, true, false]);
 eq("→ 5단계", firstOpenStep(cfg, c4), 5);
 eq("테스트 전 → dryrun 사유", checklistMode(c4), { mode: "dryrun", reason: "연동 미완료: 테스트 발송" });
 eq("테스트 발송용 모드(테스트 칸 제외) → live", checklistMode(c4.filter((x) => x.key !== "testReceived")), { mode: "live" });
@@ -151,7 +151,7 @@ eq("http 업체: 코드만 있으면 템플릿 완료", c8[2].ok, true);
 
 /* ── envFromStored ── */
 const envS = envFromStored(cfg, allTpl());
-eq("envFromStored 템플릿 코드 5종", Object.values(envS.templates), ["TPL-OK", "TPL-OK", "TPL-OK", "TPL-OK", "TPL-OK"]);
+eq("envFromStored 템플릿 코드 6종", Object.values(envS.templates), ["TPL-OK", "TPL-OK", "TPL-OK", "TPL-OK", "TPL-OK", "TPL-OK"]);
 eq("envFromStored vendor", envS.vendor, "solapi");
 
 /* ── 진행 상태 파싱 ── */

@@ -30,7 +30,11 @@ export const env = {
   // Astra 는 Chat Completions 에서 max_completion_tokens·reasoning_effort 를 받고 max_tokens 는 거부(400).
   // 단가는 gpt-5.5 의 2배($10/$50 per 1M) — llm/index.ts PRICES_USD_PER_M 와 함께 갱신할 것.
   OPENAI_MODEL_DRAFT: process.env.OPENAI_MODEL_DRAFT ?? "gpt-6-astra",
-  OPENAI_MODEL_REVIEW: process.env.OPENAI_MODEL_REVIEW ?? "gpt-5.5-mini",
+  // 검수(approve/revise/reject 판정)·설정 개선안 제안 모델. 글작성 모델(Astra)과 «다른» 모델로 교차검증하는 것이
+  // 목적이라 gpt-5.5 + 추론 강도 high 고정(llm/index.ts role="review"). 옛 기본값 gpt-5.5-mini 는 OpenAI 에 없는 모델.
+  OPENAI_MODEL_REVIEW: process.env.OPENAI_MODEL_REVIEW ?? "gpt-5.5",
+  // «이미 보류·거절된 제안과 같은 문제인가» 같은 단순 유사판정 잔무용 저비용 모델($2/$10 per 1M, role="review_lite").
+  OPENAI_MODEL_REVIEW_LITE: process.env.OPENAI_MODEL_REVIEW_LITE ?? "gpt-6.1-sol",
   // 이미지 품질·묘사 일치 심사(비전) 모델. 지시된 gpt-5.5-mini 는 OpenAI 모델 목록에 없어(404)
   // 비전 지원 mini급 중 가장 저렴한 gpt-5.4-mini($0.75/$4.50 per 1M) 를 기본값으로 둔다.
   OPENAI_MODEL_IMAGE_JUDGE: process.env.OPENAI_MODEL_IMAGE_JUDGE ?? "gpt-5.4-mini",

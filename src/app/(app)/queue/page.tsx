@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { VerdictBadge } from "@/components/review-verdict";
 import { db, schema } from "@/db/client";
 import { and, desc, eq } from "drizzle-orm";
 import { Card, CardContent } from "@/components/ui/card";
@@ -151,12 +152,7 @@ export default async function QueuePage({
                             <ImageIcon className="size-3" />
                             {d.imageCount}장
                           </span>
-                          {d.seoScore != null && (
-                            <span>SEO {d.seoScore}</span>
-                          )}
-                          {d.humanScore != null && (
-                            <span>휴먼 {d.humanScore}</span>
-                          )}
+                          <VerdictBadge verdict={d.reviewVerdict} />
                         </div>
                       </div>
                     </div>

@@ -199,11 +199,13 @@ export async function getGlobalGuideForAdmin(): Promise<{
 export async function saveGlobalGuideAction(
   formData: FormData
 ): Promise<{ ok: boolean; error?: string }> {
-  await requireAdmin();
-  const { GLOBAL_GUIDE_KEY } = await import("@/lib/global-guide");
+  const me = await requireAdmin();
+  const { GLOBAL_GUIDE_KEY, replaceGlobalGuideText } = await import("@/lib/global-guide");
   const enabledRaw = String(formData.get("enabled") ?? "");
   const enabled = enabledRaw === "on" || enabledRaw === "true";
   const text = String(formData.get("text") ?? "").trim();
+  // 본문이 바뀌면 직전 전문을 이력에 보관(개선 제안 적용과 같은 경로) → 되돌리기 가능.
+  await replaceGlobalGuideText(text, "직접 편집", { byUserId: me.id });
   await db
     .insert(schema.settings)
     .values({ key: GLOBAL_GUIDE_KEY, valueJson: JSON.stringify({ enabled, text }) })
@@ -216,6 +218,34 @@ export async function saveGlobalGuideAction(
     });
   revalidatePath("/settings");
   return { ok: true };
+}
+
+export type GuideHistoryView = { index: number; at: string; reason: string; chars: number; preview: string; text: string };
+
+export async function getGuideHistoryForAdmin(): Promise<GuideHistoryView[]> {
+  await requireAdmin();
+  const { getGuideHistory } = await import("@/lib/global-guide");
+  const h = await getGuideHistory();
+  return h.map((e, index) => ({
+    index,
+    at: e.at,
+    reason: e.reason,
+    chars: e.text.length,
+    preview: e.text.replace(/\s+/g, " ").slice(0, 80),
+    text: e.text,
+  }));
+}
+
+/** 이력의 특정 버전으로 되돌리기 — 현재 전문은 이력 맨 앞에 «되돌리기 전» 으로 보관된다. */
+export async function restoreGuideVersionAction(index: number): Promise<{ ok: boolean; error?: string; text?: string }> {
+  const me = await requireAdmin();
+  const { getGuideHistory, replaceGlobalGuideText } = await import("@/lib/global-guide");
+  const h = await getGuideHistory();
+  const entry = h[index];
+  if (!entry) return { ok: false, error: "해당 이력을 찾을 수 없습니다." };
+  await replaceGlobalGuideText(entry.text, `이력에서 되돌리기(${new Date(entry.at).toLocaleString("ko-KR")} 버전)`, { byUserId: me.id });
+  revalidatePath("/settings");
+  return { ok: true, text: entry.text };
 }
 
 // ── Unsplash ──────────────────────────────────────────────────────────────────

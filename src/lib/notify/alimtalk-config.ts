@@ -37,7 +37,7 @@ import { mockEnabled } from "./alimtalk-mock";
 /* 알림톡 연동 설정 저장소 — settings 테이블(key/valueJson) 5개 키(설계서 2026-10-13)
    · alimtalk_provider      solapi|aligo|http
    · alimtalk_credentials   키 묶음 JSON 을 crypto.ts encryptApiKey(AES-256-GCM, ENCRYPTION_KEY)로 통째 암호화
-   · alimtalk_templates     알림 5종 템플릿 코드·확인 상태(평문, 비밀 없음)
+   · alimtalk_templates     알림 6종 템플릿 코드·확인 상태(평문, 비밀 없음)
    · alimtalk_setup         연결 확인·테스트 도착 확인(평문)
    · alimtalk_fallback_sms  실패 시 문자 대체발송(기본 true)
    서버 환경변수 ALIMTALK_PROVIDER 가 있으면 «서버 설정이 우선»(그릴박스와 동일 호환). */
@@ -140,7 +140,7 @@ export async function resolveAlimtalk(): Promise<ResolvedAlimtalk> {
       checklist: [
         { key: "connected", label: "업체 연결", ok: !!fromEnv.apiKey || !!fromEnv.httpUrl, detail: "서버 설정(환경변수)" },
         { key: "profile", label: "발신프로필", ok: !!fromEnv.senderKey, detail: "서버 설정(환경변수)" },
-        { key: "templates", label: "템플릿 코드(5종)", ok: tplOk, detail: "서버 설정(환경변수)" },
+        { key: "templates", label: "템플릿 코드(6종)", ok: tplOk, detail: "서버 설정(환경변수)" },
         { key: "testReceived", label: "테스트 발송", ok, detail: ok ? "서버 설정으로 실발송" : "서버 설정이 덜 채워짐" },
       ],
     };
@@ -196,7 +196,7 @@ export async function verifyConnectionStored(): Promise<SetupResult & { result?:
   return { ok: true, message: result.message, result };
 }
 
-/* 템플릿 5종 코드 저장 + 업체 조회(가능한 업체만). 빈칸은 «아직 없음»(그 종류는 미완료) */
+/* 템플릿 6종 코드 저장 + 업체 조회(가능한 업체만). 빈칸은 «아직 없음»(그 종류는 미완료) */
 export type TemplateCheck = { event: NotifyEvent; code: string; state: TemplateState | null; message: string };
 export async function saveTemplatesStored(codes: Partial<Record<NotifyEvent, string>>): Promise<SetupResult & { checks?: TemplateCheck[] }> {
   const config = await getStoredConfig();
@@ -229,7 +229,7 @@ export async function saveTemplatesStored(codes: Partial<Record<NotifyEvent, str
   await saveTemplates(templates);
   const ready = NOTIFY_EVENTS.filter((e) => templateReady(templates[e], lookup, fp)).length;
   const all = ready === NOTIFY_EVENTS.length;
-  return { ok: all, tone: all ? undefined : "warn", message: all ? "템플릿 5종 모두 확인했습니다. 이제 «테스트 발송»으로 넘어가세요." : `템플릿 ${ready}/5 완료. 나머지는 코드를 넣거나 심사 승인 뒤 다시 «템플릿 확인»을 눌러 주세요.`, checks };
+  return { ok: all, tone: all ? undefined : "warn", message: all ? "템플릿 6종 모두 확인했습니다. 이제 «테스트 발송»으로 넘어가세요." : `템플릿 ${ready}/5 완료. 나머지는 코드를 넣거나 심사 승인 뒤 다시 «템플릿 확인»을 눌러 주세요.`, checks };
 }
 
 export async function confirmTestReceivedStored(phone: string, by: string): Promise<SetupResult> {

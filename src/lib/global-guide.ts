@@ -112,3 +112,42 @@ export async function globalGuideBlock(): Promise<string> {
     g.text.trim(),
   ].join("\n");
 }
+
+/* ───────── 변경 이력(최근 20개) — 개선 제안 적용·직접 편집·되돌리기 때 이전 전문을 보관 ───────── */
+export const GLOBAL_GUIDE_HISTORY_KEY = "global_writing_guide_history";
+export const GUIDE_HISTORY_MAX = 20;
+export type GuideHistoryEntry = { text: string; at: string; reason: string; proposalId?: string | null; byUserId?: string | null };
+
+export async function getGuideHistory(): Promise<GuideHistoryEntry[]> {
+  try {
+    const row = await db.query.settings.findFirst({ where: eq(schema.settings.key, GLOBAL_GUIDE_HISTORY_KEY) });
+    if (!row) return [];
+    const arr = JSON.parse(row.valueJson) as unknown;
+    return Array.isArray(arr) ? (arr as GuideHistoryEntry[]).filter((e) => e && typeof e.text === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeGuideHistory(entries: GuideHistoryEntry[]) {
+  const value = JSON.stringify(entries.slice(0, GUIDE_HISTORY_MAX));
+  await db
+    .insert(schema.settings)
+    .values({ key: GLOBAL_GUIDE_HISTORY_KEY, valueJson: value, updatedAt: new Date().toISOString() })
+    .onConflictDoUpdate({ target: schema.settings.key, set: { valueJson: value, updatedAt: new Date().toISOString() } });
+}
+
+/** 가이드 본문 교체 + 직전 전문을 이력 맨 앞에 보관(같은 내용이면 이력 안 쌓음). enabled 는 유지. */
+export async function replaceGlobalGuideText(nextText: string, reason: string, meta: { proposalId?: string | null; byUserId?: string | null } = {}): Promise<{ previousText: string }> {
+  const cur = await getGlobalWritingGuide();
+  if (cur.text !== nextText) {
+    const history = await getGuideHistory();
+    await writeGuideHistory([{ text: cur.text, at: new Date().toISOString(), reason, proposalId: meta.proposalId ?? null, byUserId: meta.byUserId ?? null }, ...history]);
+  }
+  const value = JSON.stringify({ enabled: cur.enabled, text: nextText });
+  await db
+    .insert(schema.settings)
+    .values({ key: GLOBAL_GUIDE_KEY, valueJson: value, updatedAt: new Date().toISOString() })
+    .onConflictDoUpdate({ target: schema.settings.key, set: { valueJson: value, updatedAt: new Date().toISOString() } });
+  return { previousText: cur.text };
+}

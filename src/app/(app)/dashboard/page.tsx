@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { VerdictBadge } from "@/components/review-verdict";
 import { db, schema } from "@/db/client";
 import { and, count, desc, eq } from "drizzle-orm";
 import {
@@ -147,12 +148,7 @@ export default async function Dashboard() {
                         </div>
                       )}
                       <div className="mt-1.5 flex items-center gap-3 text-[11px] text-ink-400">
-                        {d.seoScore != null && (
-                          <span>SEO {d.seoScore}점</span>
-                        )}
-                        {d.humanScore != null && (
-                          <span>휴먼 톤 {d.humanScore}점</span>
-                        )}
+                        <VerdictBadge verdict={d.reviewVerdict} />
                         <span>이미지 {d.imageCount}장</span>
                       </div>
                     </Link>

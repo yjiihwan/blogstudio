@@ -14,7 +14,9 @@ import {
   Users,
   UserCircle,
   BookOpenText,
+  Lightbulb,
 } from "lucide-react";
+import { openProposalCountFor } from "@/lib/proposals";
 
 export default async function AppLayout({
   children,
@@ -27,6 +29,7 @@ export default async function AppLayout({
   const h = await headers();
   const pathname = h.get("x-pathname") ?? "/dashboard";
   const banner = envBanner();
+  const openProposals = await openProposalCountFor(user).catch(() => 0);
 
   return (
     <>
@@ -44,6 +47,7 @@ export default async function AppLayout({
         { href: "/queue", label: "초안 큐", icon: <FileEdit className="size-5" /> },
         { href: "/blogs", label: "블로그·페르소나", icon: <Newspaper className="size-5" /> },
         { href: "/photos", label: "사진 요청", icon: <ImageIcon className="size-5" /> },
+        { href: "/proposals", label: openProposals > 0 ? `개선 제안함 (${openProposals})` : "개선 제안함", icon: <Lightbulb className="size-5" /> },
         { href: "/schedule", label: "스케줄", icon: <CalendarClock className="size-5" /> },
         { href: "/insights", label: "노출 분석", icon: <BarChart3 className="size-5" /> },
         { href: "/settings", label: "설정", icon: <Settings className="size-5" /> },

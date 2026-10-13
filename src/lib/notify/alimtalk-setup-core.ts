@@ -2,7 +2,7 @@ import { NOTIFY_EVENTS, type AlimtalkEnv, type NotifyEvent, type SendMode } from
 
 /* 알림톡 «개발자 없이 셀프 연동» — 순수 규칙(DB·네트워크·crypto 없음). 단위 테스트: scripts/test_alimtalk_unit.ts
    · 업체 카탈로그(가입 링크·요금·키 찾는 경로·템플릿 등록 절차)
-   · 저장 설정(암호화는 서버 모듈이)·템플릿 5종 상태·진행 상태 파싱
+   · 저장 설정(암호화는 서버 모듈이)·템플릿 6종 상태·진행 상태 파싱
    · 체크리스트 4칸(업체 연결·발신프로필·템플릿 코드·테스트 발송) → 모두 녹색이면 실발송
    · 업체 오류를 한국어 원인 + 해결법으로 분류 */
 
@@ -52,7 +52,7 @@ export const VENDOR_CATALOG: Record<SetupVendor, VendorInfo> = {
     ],
     templateSteps: [
       "솔라피 콘솔 → «카카오» → «템플릿 관리» → «템플릿 등록»",
-      "발신프로필(채널) 선택 → 템플릿 이름·내용에 아래 문구를 «복사» 버튼으로 그대로 붙여넣기(변수 #{…} 포함) — 5종 각각 등록",
+      "발신프로필(채널) 선택 → 템플릿 이름·내용에 아래 문구를 «복사» 버튼으로 그대로 붙여넣기(변수 #{…} 포함) — 6종 각각 등록",
       "«심사 요청» → 카카오 심사(보통 1~3영업일) → 승인되면 «템플릿 ID»(KA01TP 로 시작)를 복사해 아래 칸에 입력",
     ],
     templateLookup: true,
@@ -73,7 +73,7 @@ export const VENDOR_CATALOG: Record<SetupVendor, VendorInfo> = {
     ],
     templateSteps: [
       "알리고 관리자 → «카카오 알림톡» → «템플릿 관리» → «템플릿 등록»",
-      "발신프로필 선택 → 템플릿 이름·내용에 아래 문구를 «복사» 버튼으로 그대로 붙여넣기(변수 #{…} 포함) — 5종 각각 등록",
+      "발신프로필 선택 → 템플릿 이름·내용에 아래 문구를 «복사» 버튼으로 그대로 붙여넣기(변수 #{…} 포함) — 6종 각각 등록",
       "«검수 요청» → 카카오 심사(보통 1~3영업일) → 승인되면 «템플릿 코드»(TP_ 또는 TR_ 로 시작)를 복사해 아래 칸에 입력",
     ],
     templateLookup: true,
@@ -92,7 +92,7 @@ export const VENDOR_CATALOG: Record<SetupVendor, VendorInfo> = {
       { name: "senderKey", label: "발신프로필 키", placeholder: "중계 서버가 요구하는 값", secret: true, where: ["중계 서버 쪽 카카오 채널 키"] },
       SENDER_PHONE,
     ],
-    templateSteps: ["중계 서버를 운영하는 업체 콘솔에서 아래 문구 5종으로 템플릿을 등록·심사받고 코드를 받습니다."],
+    templateSteps: ["중계 서버를 운영하는 업체 콘솔에서 아래 문구 6종으로 템플릿을 등록·심사받고 코드를 받습니다."],
     templateLookup: false,
   },
 };
@@ -119,7 +119,7 @@ export function emptyCredentials(): StoredCredentials {
   return { apiKey: "", apiSecret: "", senderKey: "", senderPhone: "", httpUrl: "", httpToken: "", savedAt: "" };
 }
 
-/* ───────── 템플릿 5종 상태(평문 JSON → settings.alimtalk_templates) ───────── */
+/* ───────── 템플릿 6종 상태(평문 JSON → settings.alimtalk_templates) ───────── */
 export type TemplateState = "approved" | "pending" | "rejected" | "missing" | "unknown";
 export const TEMPLATE_STATE_LABEL: Record<TemplateState, string> = {
   approved: "승인됨",
@@ -249,7 +249,7 @@ export function parseSetupStatus(json: string | null | undefined): SetupStatus {
 /* ───────── 체크리스트 4칸 ───────── */
 export type ChecklistKey = "connected" | "profile" | "templates" | "testReceived";
 export type ChecklistItem = { key: ChecklistKey; label: string; ok: boolean; detail: string };
-export const CHECKLIST_LABEL: Record<ChecklistKey, string> = { connected: "업체 연결", profile: "발신프로필", templates: "템플릿 코드(5종)", testReceived: "테스트 발송" };
+export const CHECKLIST_LABEL: Record<ChecklistKey, string> = { connected: "업체 연결", profile: "발신프로필", templates: "템플릿 코드(6종)", testReceived: "테스트 발송" };
 
 export type ChecklistInput = { config: StoredConfig | null; templates: TemplateMap; status: SetupStatus; fingerprint: string };
 
@@ -288,7 +288,7 @@ export function buildChecklist(i: ChecklistInput): ChecklistItem[] {
       key: "templates",
       label: CHECKLIST_LABEL.templates,
       ok: tpl,
-      detail: !c ? "업체 연결 뒤 5종 코드를 등록합니다" : tpl ? (lookup ? "5종 모두 승인 확인" : "5종 코드 입력됨(조회 불가 업체)") : codeCount === 0 ? "심사 통과한 템플릿 코드 5종을 입력하고 «템플릿 확인»" : `${readyCount}/5 완료 · 코드 ${codeCount}/5 입력`,
+      detail: !c ? "업체 연결 뒤 6종 코드를 등록합니다" : tpl ? (lookup ? "6종 모두 승인 확인" : "6종 코드 입력됨(조회 불가 업체)") : codeCount === 0 ? "심사 통과한 템플릿 코드 6종을 입력하고 «템플릿 확인»" : `${readyCount}/${NOTIFY_EVENTS.length} 완료 · 코드 ${codeCount}/${NOTIFY_EVENTS.length} 입력`,
     },
     {
       key: "testReceived",

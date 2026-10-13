@@ -1,7 +1,7 @@
 /* 카카오 알림톡 — 순수 규칙(DB·네트워크 없음). 단위 테스트: scripts/test_alimtalk_unit.ts
-   · 알림 5종(가입대기·승인·거부·비번재설정·발행완료) 템플릿 원문(카카오 심사용) + 변수 치환
+   · 알림 6종(가입대기·승인·거부·비번재설정·발행완료·개선제안) 템플릿 원문(카카오 심사용) + 변수 치환
    · 휴대폰 번호 정규화(숫자만) · 서버 환경변수(옛 방식) 파싱 · 발송 모드 판정
-   그릴박스 발주앱 src/lib/notify/alimtalk-core.ts 를 블로그 스튜디오 알림 5종에 맞춰 이식(2026-10-13). */
+   그릴박스 발주앱 src/lib/notify/alimtalk-core.ts 를 블로그 스튜디오 알림 6종에 맞춰 이식(2026-10-13). */
 
 export type AlimtalkVendor = "dryrun" | "solapi" | "aligo" | "http";
 export const VENDOR_LABEL: Record<AlimtalkVendor, string> = {
@@ -11,8 +11,8 @@ export const VENDOR_LABEL: Record<AlimtalkVendor, string> = {
   http: "범용 HTTP 중계",
 };
 
-/* ───────── 알림 5종 ───────── */
-export const NOTIFY_EVENTS = ["signup_pending", "approved", "rejected", "password_reset", "publish_done"] as const;
+/* ───────── 알림 6종 ───────── */
+export const NOTIFY_EVENTS = ["signup_pending", "approved", "rejected", "password_reset", "publish_done", "improvement_proposal"] as const;
 export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
 export const EVENT_LABEL: Record<NotifyEvent, string> = {
   signup_pending: "새 회원가입 대기(관리자)",
@@ -20,6 +20,7 @@ export const EVENT_LABEL: Record<NotifyEvent, string> = {
   rejected: "계정 승인 거부",
   password_reset: "비밀번호 재설정 안내",
   publish_done: "게시물 발행 완료",
+  improvement_proposal: "글 설정 개선 제안 도착",
 };
 /* 이력에만 쓰는 특수 이벤트(템플릿 코드는 가입대기 템플릿을 빌려 쓴다) */
 export type LogEvent = NotifyEvent | "test";
@@ -59,6 +60,13 @@ export const TEMPLATES: Record<NotifyEvent, AlimtalkTemplate> = {
     name: "블로그 스튜디오 — 게시물 발행 완료",
     text: "[블로그 스튜디오] 게시물이 발행되었습니다.\n제목: #{제목}",
     vars: ["제목"],
+  },
+  /* 검수 모델이 전역 가이드·페르소나 설정 결함을 보고했을 때(2026-10-13 자동검수 개편). 개발 용어 없이. */
+  improvement_proposal: {
+    key: "improvement_proposal",
+    name: "블로그 스튜디오 — 글 설정 개선 제안",
+    text: "[블로그 스튜디오] 글 설정 개선 제안이 도착했습니다.\n대상: #{대상}\n제안: #{내용}\n개선 제안함에서 내용을 확인하고 동의 여부를 결정해 주세요.\n#{제안주소}",
+    vars: ["대상", "내용", "제안주소"],
   },
 };
 
@@ -115,6 +123,7 @@ const ENV_TPL: Record<NotifyEvent, string> = {
   rejected: "ALIMTALK_TPL_REJECTED",
   password_reset: "ALIMTALK_TPL_PASSWORD_RESET",
   publish_done: "ALIMTALK_TPL_PUBLISH_DONE",
+  improvement_proposal: "ALIMTALK_TPL_IMPROVEMENT_PROPOSAL",
 };
 export function parseAlimtalkEnv(src: Record<string, string | undefined>): AlimtalkEnv {
   const pick = (k: string) => (src[k] ?? "").trim();
@@ -125,7 +134,7 @@ export function parseAlimtalkEnv(src: Record<string, string | undefined>): Alimt
 }
 
 export type SendMode = { mode: "live" } | { mode: "dryrun"; reason: string };
-/* 환경변수 방식의 실발송 조건: 업체 + 그 업체 키 + 발신프로필 + 발신번호 + 템플릿 5종 전부 */
+/* 환경변수 방식의 실발송 조건: 업체 + 그 업체 키 + 발신프로필 + 발신번호 + 템플릿 6종 전부 */
 export function decideEnvSendMode(e: AlimtalkEnv): SendMode {
   if (e.vendor === "dryrun") return { mode: "dryrun", reason: "발송 업체 미설정(ALIMTALK_PROVIDER)" };
   const missing: string[] = [];

@@ -13,7 +13,9 @@ import {
   getImageSourceConfigInfo,
   getLLMProviderInfo,
   getGlobalGuideForAdmin,
+  getGuideHistoryForAdmin,
 } from "./actions";
+import { currentModelWiring } from "@/lib/llm";
 import { ImageSourceForm, UserImageSourceForm } from "./image-source-form";
 import { AlimtalkCard } from "./alimtalk-card";
 import { getSetupView, latestTestLog, recentLogs } from "@/lib/notify/alimtalk-config";
@@ -52,6 +54,8 @@ export default async function SettingsPage() {
   const me = isAdmin ? await getCurrentUser() : null;
   const [alimtalk, alimtalkLogs, latestTest] = isAdmin && me ? await Promise.all([getSetupView(), recentLogs(100), latestTestLog(me.id)]) : [null, [], null];
   const globalGuide = isAdmin ? await getGlobalGuideForAdmin() : null;
+  const guideHistory = isAdmin ? await getGuideHistoryForAdmin() : [];
+  const wiring = currentModelWiring();
   const isUserKeyMode = userApiKeyInfo.mode === "user_key";
   // 어드민 통합 카드의 헤더 배지: 현재 선택된 provider의 시스템 키가 등록돼 있는가
   const selectedSystemKeyConnected =
@@ -91,6 +95,7 @@ export default async function SettingsPage() {
                 initialEnabled={globalGuide.enabled}
                 initialText={globalGuide.text}
                 defaultText={globalGuide.defaultText}
+                history={guideHistory}
               />
             </CardContent>
           </Card>
@@ -120,6 +125,14 @@ export default async function SettingsPage() {
                 initialAnthropicMasked={dbMasked}
                 initialOpenAIMasked={systemOpenAIMasked}
               />
+              {/* 모델 배선(서버 환경변수로 정함 — 화면에서 바꾸는 칸은 없음) */}
+              <div className="mt-4 rounded-lg bg-paper-100 px-4 py-3 text-xs text-ink-600 space-y-1" data-testid="model-wiring">
+                <div className="font-semibold text-ink-800">현재 모델 배선 (ChatGPT 기준)</div>
+                <div>글 작성·다듬기: <code>{wiring.draft}</code></div>
+                <div>자동 검수·설정 개선안: <code>{wiring.review}</code> (추론 강도 high — 글 작성과 다른 모델로 교차 검증)</div>
+                <div>제안 유사판정(같은 문제인지): <code>{wiring.reviewLite}</code> (저비용)</div>
+                <div className="text-ink-400">Claude 선택 시: 작성 {wiring.anthropicDraft} · 검수 {wiring.anthropicReview}. 변경은 서버 환경변수 OPENAI_MODEL_DRAFT / OPENAI_MODEL_REVIEW / OPENAI_MODEL_REVIEW_LITE.</div>
+              </div>
             </CardContent>
           </Card>
         )}

@@ -220,7 +220,7 @@ function SetupWizard({ setup, adminPhoneMasked, latestTest }: { setup: SetupView
           </form>
         </StepShell>
 
-        <StepShell n={4} title="템플릿 등록·확인(5종)" done={stepDone[4]} open={open === 4} onOpen={() => setOpen(4)} summary={`${setup.templates.filter((t) => t.ready).length}/5 완료`}>
+        <StepShell n={4} title="템플릿 등록·확인(6종)" done={stepDone[4]} open={open === 4} onOpen={() => setOpen(4)} summary={`${setup.templates.filter((t) => t.ready).length}/5 완료`}>
           {info && (
             <ol className="text-xs text-ink-700 space-y-1 mb-2 list-decimal pl-5">
               {info.templateSteps.map((s, i) => (

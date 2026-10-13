@@ -64,8 +64,15 @@ function isPlaceholderKey(k: string | null | undefined): boolean {
 
 export type LLMMessage = { role: "user" | "assistant"; content: string };
 
+/** 호출 용도 — provider 별 모델 배선(env)을 facade 안에서 고른다.
+ *  draft(기본)=글작성 OPENAI_MODEL_DRAFT · review=검수·개선안 OPENAI_MODEL_REVIEW(추론 high 고정) ·
+ *  review_lite=유사판정 잔무 OPENAI_MODEL_REVIEW_LITE(추론 low). Anthropic provider 면 ANTHROPIC_MODEL_* 대응. */
+export type LLMRole = "draft" | "review" | "review_lite";
+
 export type LLMOptions = {
   model?: string;
+  /** 용도별 모델 배선. model 을 직접 주면 그게 우선. */
+  role?: LLMRole;
   maxTokens?: number;
   system?: string;
   messages: LLMMessage[];
@@ -100,7 +107,28 @@ const PRICES_USD_PER_M: Record<string, { in: number; out: number }> = {
   // 표에 없는 모델은 claude-sonnet 단가로 집계되므로 모델 전환 시 반드시 추가.
   "gpt-5.5": { in: 5, out: 30 },
   "gpt-6-astra": { in: 10, out: 50 },
+  "gpt-6.1-sol": { in: 2, out: 10 },
 };
+
+export function modelForRole(provider: "anthropic" | "openai", role: LLMRole | undefined): string {
+  if (provider === "openai") {
+    if (role === "review") return env.OPENAI_MODEL_REVIEW;
+    if (role === "review_lite") return env.OPENAI_MODEL_REVIEW_LITE;
+    return env.OPENAI_MODEL_DRAFT;
+  }
+  return role === "review" || role === "review_lite" ? env.ANTHROPIC_MODEL_REVIEW : env.ANTHROPIC_MODEL_DRAFT;
+}
+
+/** 보고·설정 화면용 — 현재 배선된 모델 목록(비밀 없음). */
+export function currentModelWiring() {
+  return {
+    draft: env.OPENAI_MODEL_DRAFT,
+    review: env.OPENAI_MODEL_REVIEW,
+    reviewLite: env.OPENAI_MODEL_REVIEW_LITE,
+    anthropicDraft: env.ANTHROPIC_MODEL_DRAFT,
+    anthropicReview: env.ANTHROPIC_MODEL_REVIEW,
+  };
+}
 const USD_KRW = 1380;
 
 function costFor(model: string, inT: number, outT: number) {
@@ -227,7 +255,7 @@ export async function llm(opts: LLMOptions): Promise<LLMResult> {
 }
 
 async function callAnthropic(opts: LLMOptions, apiKey: string): Promise<LLMResult> {
-  const model = opts.model ?? env.ANTHROPIC_MODEL_DRAFT;
+  const model = opts.model ?? modelForRole("anthropic", opts.role);
   const client = new Anthropic({ apiKey });
 
   let res: Awaited<ReturnType<typeof client.messages.create>>;
@@ -265,7 +293,7 @@ async function callAnthropic(opts: LLMOptions, apiKey: string): Promise<LLMResul
 }
 
 async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> {
-  const model = opts.model ?? env.OPENAI_MODEL_DRAFT;
+  const model = opts.model ?? modelForRole("openai", opts.role);
   const client = new OpenAI({ apiKey });
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -280,7 +308,9 @@ async function callOpenAI(opts: LLMOptions, apiKey: string): Promise<LLMResult> 
   // xhigh(최고) 퀄 차이가 사실상 없고 xhigh는 ~2배 느림·비쌈 → 기본 "high"(퀄 동일,
   // 빠르고 저렴, prod 타임아웃 위험 ↓). 필요시 env OPENAI_REASONING_EFFORT=xhigh.
   const isReasoning = /^(gpt-[5-9]|o[0-9])/.test(model);
-  const effort = opts.reasoningEffort ?? process.env.OPENAI_REASONING_EFFORT ?? "high";
+  // 검수는 high 고정(교차검증 목적·운영자 결정 2026-10-13), 유사판정 잔무는 low(저비용).
+  const roleEffort = opts.role === "review" ? "high" : opts.role === "review_lite" ? "low" : undefined;
+  const effort = roleEffort ?? opts.reasoningEffort ?? process.env.OPENAI_REASONING_EFFORT ?? "high";
   const reasoning = isReasoning ? { reasoning_effort: effort as "low" | "medium" | "high" | "xhigh" } : {};
   let res: OpenAI.Chat.Completions.ChatCompletion;
   try {

@@ -45,6 +45,14 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
     // 규칙 기반 문체 지표(0011). null = 미계산 → 읽을 때 즉석 계산으로 대체된다.
     { name: "style_metrics_json", ddl: "`style_metrics_json` text" },
   ],
+  drafts: [
+    // 모델 검수 판정(0014). null = 검수 전/구버전 초안.
+    { name: "review_verdict", ddl: "`review_verdict` text" },
+    { name: "review_reason", ddl: "`review_reason` text" },
+    { name: "review_flags_json", ddl: "`review_flags_json` text NOT NULL DEFAULT '[]'" },
+    { name: "review_model", ddl: "`review_model` text" },
+    { name: "review_meta_json", ddl: "`review_meta_json` text" },
+  ],
   personas: [
     { name: "age_group", ddl: "`age_group` text" },
     { name: "gender", ddl: "`gender` text" },
@@ -61,6 +69,36 @@ const EXPECTED: Record<string, ColumnSpec[]> = {
  * CREATE TABLE IF NOT EXISTS 라 멱등·비파괴다. DDL 은 drizzle 마이그레이션 원문과 동일하게 유지할 것.
  */
 const EXPECTED_TABLES: Array<{ name: string; ddl: string }> = [
+  {
+    name: "improvement_proposals", // drizzle/0014_review_overhaul.sql
+    ddl: `CREATE TABLE IF NOT EXISTS \`improvement_proposals\` (
+      \`id\` text PRIMARY KEY NOT NULL,
+      \`draft_id\` text,
+      \`blog_id\` text,
+      \`persona_id\` text,
+      \`target\` text NOT NULL,
+      \`field\` text NOT NULL,
+      \`problem\` text NOT NULL,
+      \`proposed_change_json\` text DEFAULT '{}' NOT NULL,
+      \`confidence\` text DEFAULT 'medium' NOT NULL,
+      \`systemic\` integer DEFAULT false NOT NULL,
+      \`occurrence_count\` integer DEFAULT 1 NOT NULL,
+      \`evidence_draft_ids_json\` text DEFAULT '[]' NOT NULL,
+      \`target_user_ids_json\` text DEFAULT '[]' NOT NULL,
+      \`status\` text DEFAULT 'pending' NOT NULL,
+      \`applied_after\` text,
+      \`reject_reason\` text,
+      \`decided_by\` text,
+      \`decided_at\` text,
+      \`applied_at\` text,
+      \`rollback_json\` text,
+      \`created_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL,
+      \`updated_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL,
+      FOREIGN KEY (\`draft_id\`) REFERENCES \`drafts\`(\`id\`) ON UPDATE no action ON DELETE set null,
+      FOREIGN KEY (\`blog_id\`) REFERENCES \`blogs\`(\`id\`) ON UPDATE no action ON DELETE cascade,
+      FOREIGN KEY (\`decided_by\`) REFERENCES \`users\`(\`id\`) ON UPDATE no action ON DELETE no action
+    )`,
+  },
   {
     name: "alimtalk_logs", // drizzle/0013_alimtalk.sql
     ddl: `CREATE TABLE IF NOT EXISTS \`alimtalk_logs\` (

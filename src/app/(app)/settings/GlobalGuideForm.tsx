@@ -5,21 +5,44 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { saveGlobalGuideAction } from "./actions";
+import { saveGlobalGuideAction, restoreGuideVersionAction, type GuideHistoryView } from "./actions";
+import { History } from "lucide-react";
 
 export function GlobalGuideForm({
   initialEnabled,
   initialText,
   defaultText,
+  history = [],
 }: {
   initialEnabled: boolean;
   initialText: string;
   defaultText: string;
+  history?: GuideHistoryView[];
 }) {
   const [enabled, setEnabled] = useState(initialEnabled);
   const [text, setText] = useState(initialText);
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [restoring, setRestoring] = useState<number | null>(null);
+
+  function handleRestore(index: number) {
+    if (!window.confirm("이 버전으로 되돌릴까요? 지금 내용은 이력에 보관됩니다.")) return;
+    setRestoring(index);
+    start(async () => {
+      try {
+        const res = await restoreGuideVersionAction(index);
+        if (res.ok && typeof res.text === "string") {
+          setText(res.text);
+          setMsg({ ok: true, text: "되돌렸습니다 ✓ (새로고침하면 이력이 갱신됩니다)" });
+        } else setMsg({ ok: false, text: res.error ?? "되돌리기 실패" });
+      } catch {
+        setMsg({ ok: false, text: "되돌리기 중 오류가 발생했습니다." });
+      } finally {
+        setRestoring(null);
+      }
+    });
+  }
 
   function handleSave() {
     setMsg(null);
@@ -100,6 +123,39 @@ export function GlobalGuideForm({
           <span className={`text-sm ${msg.ok ? "text-green-600" : "text-red-600"}`}>
             {msg.text}
           </span>
+        )}
+      </div>
+
+      {/* 변경 이력 — 개선 제안 적용·직접 편집·되돌리기 때 직전 전문 보관(최근 20개) */}
+      <div className="rounded-lg border border-paper-300 bg-paper-50" data-testid="guide-history">
+        <button
+          type="button"
+          onClick={() => setShowHistory((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-2.5 text-sm font-semibold"
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <History className="size-4" /> 변경 이력 {history.length}건
+          </span>
+          <span className="text-xs text-ink-400">{showHistory ? "접기" : "펼치기"}</span>
+        </button>
+        {showHistory && (
+          <ul className="divide-y divide-paper-200 border-t border-paper-200">
+            {history.length === 0 && <li className="px-4 py-3 text-xs text-ink-400">아직 이력이 없습니다.</li>}
+            {history.map((h) => (
+              <li key={h.index} className="flex items-start justify-between gap-3 px-4 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-ink-800">
+                    {new Date(h.at).toLocaleString("ko-KR")} · {h.reason}
+                  </div>
+                  <div className="truncate text-[11px] text-ink-500">{h.chars.toLocaleString()}자 · {h.preview}</div>
+                </div>
+                <Button type="button" size="sm" variant="outline" disabled={pending} onClick={() => handleRestore(h.index)} data-testid={`guide-restore-${h.index}`}>
+                  {restoring === h.index ? <Loader2 className="size-3 animate-spin" /> : null}
+                  이 버전으로 되돌리기
+                </Button>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </div>
