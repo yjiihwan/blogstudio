@@ -1,7 +1,8 @@
 /**
  * 이미지 품질·묘사 일치 심사. OpenAI 비전 모델에 이미지+한국어 묘사를 보내
  * {match, quality, issues} 를 받고 기준(minMatch/minQuality) 으로 합격 판정.
- * 안전장치: 키 없음·호출 오류·JSON 파싱 실패 → "skipped"(종전처럼 즉시 채택), 요청당 호출 상한.
+ * 안전장치: 키 없음·호출 오류·JSON 파싱 실패 → "skipped"(종전처럼 즉시 채택).
+ * 요청당 호출 상한 초과 → "capped": 후보를 채택하지 않는다(심사 못 한 사진이 묘사와 다를 확률이 높음 — S10).
  */
 import OpenAI from "openai";
 import { env } from "./env";
@@ -13,7 +14,8 @@ export type JudgeScore = { match: number; quality: number; issues: string[] };
 export type JudgeVerdict =
   | ({ status: "pass" } & JudgeScore)
   | ({ status: "fail" } & JudgeScore)
-  | { status: "skipped"; reason: string };
+  | { status: "skipped"; reason: string }
+  | { status: "capped"; reason: string };
 
 export type JudgeContext = {
   enabled: boolean;
@@ -52,6 +54,13 @@ export function judgeBudgetLeft(ctx: JudgeContext): boolean {
   return ctx.calls < ctx.maxCalls;
 }
 
+/** 심사가 실제로 돌아가는 상태에서 상한을 다 쓴 경우만 true(검증 꺼짐·키 없음이면 상한과 무관). */
+export function judgeCapped(ctx: JudgeContext): boolean {
+  return ctx.enabled && !ctx.unavailableReason && !!ctx.client && !judgeBudgetLeft(ctx);
+}
+
+export const budgetCapReason = (ctx: JudgeContext) => `심사 호출 상한(${ctx.maxCalls}회) 초과`;
+
 const SYSTEM_PROMPT = [
   "You are a strict photo editor reviewing a candidate image for a Korean blog post.",
   "You receive the image and a Korean description of what the image should show.",
@@ -67,7 +76,7 @@ const SYSTEM_PROMPT = [
 ].join("\n");
 
 /**
- * 이미지 1장 심사. pass/fail/skipped 중 하나. 예외는 절대 던지지 않는다.
+ * 이미지 1장 심사. pass/fail/skipped/capped 중 하나. 예외는 절대 던지지 않는다.
  */
 export async function judgeImage(
   ctx: JudgeContext,
@@ -79,9 +88,7 @@ export async function judgeImage(
   if (ctx.unavailableReason || !ctx.client) {
     return { status: "skipped", reason: ctx.unavailableReason ?? "OpenAI 키 없음" };
   }
-  if (!judgeBudgetLeft(ctx)) {
-    return { status: "skipped", reason: `심사 호출 상한(${ctx.maxCalls}회) 초과` };
-  }
+  if (!judgeBudgetLeft(ctx)) return { status: "capped", reason: budgetCapReason(ctx) };
   ctx.calls += 1;
 
   try {

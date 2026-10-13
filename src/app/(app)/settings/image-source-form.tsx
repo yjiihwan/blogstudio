@@ -317,7 +317,7 @@ function SourceConfigPanel({
             <p className="text-sm font-semibold">이미지 자동 검증</p>
             <p className="text-[11px] text-ink-500 leading-relaxed">
               후보 이미지를 OpenAI 비전 모델로 심사(묘사 일치 0~10 · 품질 0~10)해 기준을 넘는 첫 장을 채택합니다.
-              끄면 종전처럼 첫 결과를 즉시 채택합니다. OpenAI 키가 없거나 심사 오류면 자동으로 건너뜁니다(요청당 최대 8회).
+              끄면 종전처럼 첫 결과를 즉시 채택합니다. OpenAI 키가 없거나 심사 오류면 자동으로 건너뜁니다. 심사는 요청당 최대 8회 — 8회 안에 합격작이 없으면 채택하지 않고 «직접 촬영 필요»로 남깁니다.
             </p>
           </div>
           <Switch

@@ -6,6 +6,7 @@
  * 설정(사용여부·순서·자동검증)은 lib/image-source-config.ts, 키는 lib/image-keys.ts.
  * 각 소스는 실패 사유 코드를 돌려주고, 시도 내역(attempts)은 images.sourceMetaJson 에 기록된다.
  * 자동 검증이 켜져 있으면 후보를 비전 모델로 심사해 첫 합격작을 채택한다(lib/image-judge.ts).
+ * 요청당 심사 상한을 다 쓰면 채택하지 않고 judge_rejected(stop="budget_cap")로 실패 → 직접 촬영 안내.
  * 재시도(같은 소스 반복 호출)는 하지 않는다.
  */
 import { db, schema } from "@/db/client";
@@ -18,6 +19,8 @@ import { SOURCE_LABEL, type ImageSource, type ImageSourceConfig } from "./image-
 import {
   createJudgeContext,
   judgeImage,
+  judgeCapped,
+  budgetCapReason,
   estimateJudgeCostUsd,
   type JudgeContext,
   type JudgeScore,
@@ -50,6 +53,9 @@ export const FAIL_REASON_LABEL: Record<FailReason, string> = {
   unknown: "알 수 없는 오류",
 };
 
+/** 심사 상한 소진으로 중단된 시도 표시(attempts·로그에 그대로 남김) */
+export type StopReason = "budget_cap";
+
 /** 채택 이미지의 심사 기록(sourceMetaJson.judge) */
 export type JudgeRecord =
   | { verified: "pass"; match: number; quality: number; issues: string[]; candidatesTried: number; model: string }
@@ -61,6 +67,7 @@ export type Attempt = {
   reason?: FailReason;
   detail?: string;
   candidatesTried?: number;
+  stop?: StopReason;
   /** 탈락 후보들의 심사 점수(디버깅·보고용) */
   rejected?: Array<{ match: number; quality: number; issues: string[] }>;
 };
@@ -76,7 +83,18 @@ type Sourced = {
 
 type ProviderResult =
   | { ok: true; sourced: Sourced; candidatesTried: number; rejected: JudgeScore[] }
-  | { ok: false; reason: FailReason; detail?: string; candidatesTried?: number; rejected?: JudgeScore[] };
+  | { ok: false; reason: FailReason; detail?: string; candidatesTried?: number; rejected?: JudgeScore[]; stop?: StopReason };
+
+function capped(judge: JudgeContext, rejected: JudgeScore[], unit: "장" | "회", candidatesTried: number): ProviderResult {
+  return {
+    ok: false,
+    reason: "judge_rejected",
+    detail: `${rejected.length}${unit} · ${budgetCapReason(judge)}`,
+    candidatesTried,
+    rejected,
+    stop: "budget_cap",
+  };
+}
 
 const STOCK_CANDIDATES = 5;
 
@@ -139,11 +157,13 @@ async function pickStockCandidate(
   let downloaded = 0;
   const rejected: JudgeScore[] = [];
   for (const c of candidates.slice(0, STOCK_CANDIDATES)) {
+    if (judgeCapped(judge)) return capped(judge, rejected, "장", tried);
     tried += 1;
     const buffer = await fetchBytes(c.url);
     if (!buffer) continue;
     downloaded += 1;
     const verdict = await judgeImage(judge, buffer, "image/jpeg", description);
+    if (verdict.status === "capped") return capped(judge, rejected, "장", tried - 1);
     if (verdict.status === "fail") {
       rejected.push({ match: verdict.match, quality: verdict.quality, issues: verdict.issues });
       continue;
@@ -229,11 +249,14 @@ async function generateWithJudge(
   const rejected: JudgeScore[] = [];
   let avoid: string[] = [];
   for (let attempt = 1; attempt <= 2; attempt++) {
+    // 심사 못 할 이미지를 유료로 생성하지 않는다.
+    if (judgeCapped(judge)) return capped(judge, rejected, "회", attempt - 1);
     const g = await gen(aiPrompt(description, feedback, avoid));
     if (!g.ok) {
       return { ok: false, reason: g.reason, detail: attempt === 2 ? `재생성 실패${g.detail ? ` · ${g.detail}` : ""}` : g.detail, candidatesTried: attempt, rejected };
     }
     const verdict = await judgeImage(judge, g.buffer, g.mimeType, description);
+    if (verdict.status === "capped") return capped(judge, rejected, "회", attempt - 1);
     if (verdict.status === "fail") {
       rejected.push({ match: verdict.match, quality: verdict.quality, issues: verdict.issues });
       avoid = verdict.issues;
@@ -345,6 +368,7 @@ type SourceOutcome = { sourced: Sourced | null; attempts: Attempt[] };
 async function runGroup(
   group: "stock" | "ai",
   cfg: ImageSourceConfig,
+  judge: JudgeContext,
   run: (source: ImageSource) => Promise<ProviderResult | { skip: FailReason }>
 ): Promise<SourceOutcome> {
   const attempts: Attempt[] = [];
@@ -352,6 +376,11 @@ async function runGroup(
   for (const source of order) {
     if (!cfg.enabled[source]) {
       attempts.push({ source, result: "skipped", reason: "disabled" });
+      continue;
+    }
+    // 상한은 요청 단위 — 남은 소스도 심사할 수 없으니 호출하지 않고 불합격 처리.
+    if (judgeCapped(judge)) {
+      attempts.push({ source, result: "failed", reason: "judge_rejected", detail: "심사 상한 소진 — 시도 안 함", candidatesTried: 0, stop: "budget_cap" });
       continue;
     }
     const r = await run(source);
@@ -369,6 +398,7 @@ async function runGroup(
       reason: r.reason,
       detail: r.detail,
       candidatesTried: r.candidatesTried,
+      ...(r.stop ? { stop: r.stop } : {}),
       ...(r.rejected?.length ? { rejected: r.rejected } : {}),
     });
   }
@@ -377,7 +407,7 @@ async function runGroup(
 
 type SourceByModeResult =
   | { ok: true; sourced: Sourced; attempts: Attempt[]; judge: JudgeContext; query?: string }
-  | { ok: false; error: string; attempts: Attempt[]; judge: JudgeContext; query?: string };
+  | { ok: false; error: string; attempts: Attempt[]; judge: JudgeContext; query?: string; needsUserShot?: boolean };
 
 async function sourceByMode(mode: AutoMode, description: string, userId: string, feedback?: string): Promise<SourceByModeResult> {
   const res = await resolveImageSources(userId);
@@ -390,7 +420,7 @@ async function sourceByMode(mode: AutoMode, description: string, userId: string,
   let query: string | undefined;
   const runStock = async (): Promise<SourceOutcome> => {
     const getQuery = async () => (query ??= await toEnglishQuery(description, userId, feedback));
-    return runGroup("stock", config, async (source) => {
+    return runGroup("stock", config, judge, async (source) => {
       if (source === "unsplash") {
         if (!keys.unsplash) return { skip: "no_key" };
         return searchUnsplash(await getQuery(), keys.unsplash, description, judge);
@@ -401,7 +431,7 @@ async function sourceByMode(mode: AutoMode, description: string, userId: string,
   };
 
   const runAi = async (): Promise<SourceOutcome> =>
-    runGroup("ai", config, async (source) => {
+    runGroup("ai", config, judge, async (source) => {
       if (source === "google_ai") {
         const k = keys.googleAi;
         if (!k) return { skip: "no_key" };
@@ -413,13 +443,20 @@ async function sourceByMode(mode: AutoMode, description: string, userId: string,
       return generateWithJudge((p) => genOpenAI(p, k), "gpt-image-1", description, feedback, judge);
     });
 
-  const fail = (prefix: string, attempts: Attempt[]): SourceByModeResult => ({
-    ok: false,
-    error: `${prefix} — ${describeAttempts(attempts)}`,
-    attempts,
-    judge,
-    query,
-  });
+  const fail = (prefix: string, attempts: Attempt[]): SourceByModeResult => {
+    if (attempts.some((a) => a.stop === "budget_cap")) {
+      const n = attempts.reduce((sum, a) => sum + (a.rejected?.length ?? 0), 0);
+      return {
+        ok: false,
+        error: `심사 불합격(${n}장) — 묘사에 맞는 사진을 찾지 못했습니다. 직접 촬영해 올려주세요. (${describeAttempts(attempts)})`,
+        attempts,
+        judge,
+        query,
+        needsUserShot: true,
+      };
+    }
+    return { ok: false, error: `${prefix} — ${describeAttempts(attempts)}`, attempts, judge, query };
+  };
   const success = (sourced: Sourced, attempts: Attempt[]): SourceByModeResult => ({ ok: true, sourced, attempts, judge, query });
 
   if (mode === "stock") {
@@ -449,7 +486,7 @@ async function sourceByMode(mode: AutoMode, description: string, userId: string,
 
 export type AutoSourceResult =
   | { ok: true; provider: string; imageUrl: string; judge: JudgeRecord; attempts: Attempt[] }
-  | { ok: false; error: string; attempts: Attempt[] };
+  | { ok: false; error: string; attempts: Attempt[]; needsUserShot?: boolean };
 
 /**
  * 사진 요청 1건을 자동 소싱해 저장하고 요청을 uploaded로 갱신한다.
@@ -481,12 +518,14 @@ export async function autoSourceForRequest(opts: {
       mode: opts.mode,
       ok: result.ok,
       query: result.query,
-      ...(result.ok ? { provider: result.sourced.meta.provider, judge: result.sourced.judge } : { error: result.error }),
+      ...(result.ok
+        ? { provider: result.sourced.meta.provider, judge: result.sourced.judge }
+        : { error: result.error, ...(result.needsUserShot ? { stop: "budget_cap", needsUserShot: true } : {}) }),
       attempts: result.attempts,
       judgeCalls: judgeSummary,
     })
   );
-  if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts };
+  if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts, needsUserShot: result.needsUserShot };
   const { sourced, attempts } = result;
 
   const { urlPath, size } = await saveImageBuffer(sourced.buffer, sourced.ext);

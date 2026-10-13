@@ -83,6 +83,7 @@ export async function autoSourcePhotoAction(
   imageUrl?: string;
   judge?: JudgeRecord;
   attempts?: Attempt[];
+  needsUserShot?: boolean;
 }> {
   const user = await requireUser();
   if (!requestId) return { ok: false, error: "요청 ID가 없습니다." };
@@ -95,7 +96,7 @@ export async function autoSourcePhotoAction(
 
   const { autoSourceForRequest } = await import("@/lib/image-sourcing");
   const res = await autoSourceForRequest({ requestId, mode, userId: user.id, feedback });
-  if (!res.ok) return { ok: false, error: res.error, attempts: res.attempts };
+  if (!res.ok) return { ok: false, error: res.error, attempts: res.attempts, needsUserShot: res.needsUserShot };
   // revalidate는 안 함 — 같은 카드에서 미리보기/반려/재생성 루프를 돌 수 있도록 카드를 유지.
   return { ok: true, provider: res.provider, imageUrl: res.imageUrl, judge: res.judge, attempts: res.attempts };
 }

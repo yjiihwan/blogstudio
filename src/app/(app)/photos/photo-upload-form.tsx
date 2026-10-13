@@ -24,6 +24,7 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
   const [autoJudge, setAutoJudge] = useState<JudgeRecord | null>(null);
   const [autoAttempts, setAutoAttempts] = useState<Attempt[]>([]);
   const [autoErr, setAutoErr] = useState<string | null>(null);
+  const [needsShot, setNeedsShot] = useState(false);
   const [autoPending, startAuto] = useTransition();
   const [busyMode, setBusyMode] = useState<AutoMode | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -32,6 +33,7 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
 
   function runAuto(mode: AutoMode, fb?: string) {
     setAutoErr(null);
+    setNeedsShot(false);
     setBusyMode(mode);
     startAuto(async () => {
       const res = await autoSourcePhotoAction(requestId, mode, fb);
@@ -45,6 +47,7 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
         setFeedback("");
       } else {
         setAutoErr(res.error ?? "실패했습니다.");
+        setNeedsShot(!!res.needsUserShot);
       }
     });
   }
@@ -74,6 +77,7 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
         </div>
 
         {autoErr && <p className="text-xs text-red-500 text-center">{autoErr}</p>}
+        {needsShot && <UserShotNotice />}
 
         {!showFeedback ? (
           <div className="flex gap-2">
@@ -205,10 +209,23 @@ export function PhotoUploadForm({ requestId }: { requestId: string }) {
           스톡=Unsplash/Pexels 검색 · AI=이미지 생성 · 스톡→AI=스톡 먼저, 없으면 AI
         </p>
         {autoErr && <p className="text-xs text-red-500 mt-1.5">{autoErr}</p>}
+        {needsShot && <UserShotNotice />}
       </div>
 
       <SkipForm requestId={requestId} />
     </>
+  );
+}
+
+/** 자동 심사에서 끝내 맞는 사진을 못 찾은 경우 — 이 슬롯은 직접 촬영 대상으로 남는다. */
+function UserShotNotice() {
+  return (
+    <div className="mt-1.5 flex items-start gap-1.5 rounded-md bg-accent-100 px-2 py-1.5 text-[11px] text-accent-700">
+      <Camera className="size-3.5 shrink-0 mt-px" />
+      <span>
+        <b>직접 촬영 필요</b> — 스톡·AI 사진으로는 이 묘사를 채울 수 없습니다. «사진 촬영·직접 업로드»로 올려주세요.
+      </span>
+    </div>
   );
 }
 
