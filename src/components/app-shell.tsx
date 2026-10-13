@@ -26,9 +26,7 @@ export function AppShell({
       <aside className="hidden lg:flex fixed inset-y-0 left-0 w-60 flex-col border-r border-paper-300 bg-paper-50">
         <div className="px-5 pt-6 pb-5">
           <Link href="/dashboard" className="flex items-center gap-2">
-            <div className="size-8 rounded-md bg-ink-900 text-paper-100 flex items-center justify-center font-serif font-black">
-              S
-            </div>
+            <img src="/brand/blogstudio_symbol_color.svg" alt="" aria-hidden="true" className="size-8 rounded-md" />
             <div className="font-bold tracking-tight">Blog Studio</div>
           </Link>
         </div>
@@ -88,9 +86,7 @@ export function AppShell({
 
       <header className="lg:hidden sticky top-0 z-30 bg-paper-50 border-b border-paper-300 px-4 h-14 flex items-center justify-between">
         <Link href="/dashboard" className="flex items-center gap-2">
-          <div className="size-7 rounded-md bg-ink-900 text-paper-100 flex items-center justify-center font-serif text-sm font-black">
-            S
-          </div>
+          <img src="/brand/blogstudio_symbol_color.svg" alt="" aria-hidden="true" className="size-7 rounded-md" />
           <div className="text-sm font-bold">Blog Studio</div>
         </Link>
         <form action="/logout" method="post">
